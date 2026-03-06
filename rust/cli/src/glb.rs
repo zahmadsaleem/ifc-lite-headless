@@ -7,12 +7,17 @@
 //! Produces a single .glb file where each IFC element is a named node
 //! with `node.name = GlobalId`.
 
+use crate::config::{ConvertConfig, UpAxis};
 use crate::processor::GuidMesh;
 use std::io::Write;
 use std::path::Path;
 
 /// Write meshes to a GLB file. Returns the file size in bytes.
-pub fn write_glb(meshes: &[GuidMesh], path: &Path) -> Result<usize, Box<dyn std::error::Error>> {
+pub fn write_glb(
+    meshes: &[GuidMesh],
+    path: &Path,
+    config: &ConvertConfig,
+) -> Result<usize, Box<dyn std::error::Error>> {
     // Phase 1: Build the binary buffer (interleaved positions + normals, then indices)
     let mut bin_buffer: Vec<u8> = Vec::new();
 
@@ -34,6 +39,8 @@ pub fn write_glb(meshes: &[GuidMesh], path: &Path) -> Result<usize, Box<dyn std:
 
     let mut metas: Vec<MeshMeta> = Vec::with_capacity(meshes.len());
 
+    let y_up = config.up_axis == UpAxis::Y;
+
     for gm in meshes {
         let mesh = &gm.mesh;
         let vertex_count = mesh.positions.len() / 3;
@@ -43,28 +50,65 @@ pub fn write_glb(meshes: &[GuidMesh], path: &Path) -> Result<usize, Box<dyn std:
         let mut min_pos = [f32::MAX; 3];
         let mut max_pos = [f32::MIN; 3];
         for i in 0..vertex_count {
+            // If Y-up, swap Y and Z: (x, y, z) -> (x, z, -y)
+            let (x, y, z) = if y_up {
+                (
+                    mesh.positions[i * 3],
+                    mesh.positions[i * 3 + 2],
+                    -mesh.positions[i * 3 + 1],
+                )
+            } else {
+                (
+                    mesh.positions[i * 3],
+                    mesh.positions[i * 3 + 1],
+                    mesh.positions[i * 3 + 2],
+                )
+            };
+            let pos = [x, y, z];
             for j in 0..3 {
-                let v = mesh.positions[i * 3 + j];
-                if v < min_pos[j] {
-                    min_pos[j] = v;
+                if pos[j] < min_pos[j] {
+                    min_pos[j] = pos[j];
                 }
-                if v > max_pos[j] {
-                    max_pos[j] = v;
+                if pos[j] > max_pos[j] {
+                    max_pos[j] = pos[j];
                 }
             }
         }
 
         // Positions
         let positions_offset = bin_buffer.len();
-        for &v in &mesh.positions {
-            bin_buffer.extend_from_slice(&v.to_le_bytes());
+        if y_up {
+            for i in 0..vertex_count {
+                let x = mesh.positions[i * 3];
+                let y = mesh.positions[i * 3 + 2];
+                let z = -mesh.positions[i * 3 + 1];
+                bin_buffer.extend_from_slice(&x.to_le_bytes());
+                bin_buffer.extend_from_slice(&y.to_le_bytes());
+                bin_buffer.extend_from_slice(&z.to_le_bytes());
+            }
+        } else {
+            for &v in &mesh.positions {
+                bin_buffer.extend_from_slice(&v.to_le_bytes());
+            }
         }
         let positions_byte_length = bin_buffer.len() - positions_offset;
 
         // Normals
         let normals_offset = bin_buffer.len();
-        for &v in &mesh.normals {
-            bin_buffer.extend_from_slice(&v.to_le_bytes());
+        if y_up {
+            let normal_count = mesh.normals.len() / 3;
+            for i in 0..normal_count {
+                let x = mesh.normals[i * 3];
+                let y = mesh.normals[i * 3 + 2];
+                let z = -mesh.normals[i * 3 + 1];
+                bin_buffer.extend_from_slice(&x.to_le_bytes());
+                bin_buffer.extend_from_slice(&y.to_le_bytes());
+                bin_buffer.extend_from_slice(&z.to_le_bytes());
+            }
+        } else {
+            for &v in &mesh.normals {
+                bin_buffer.extend_from_slice(&v.to_le_bytes());
+            }
         }
         let normals_byte_length = bin_buffer.len() - normals_offset;
 
@@ -79,7 +123,7 @@ pub fn write_glb(meshes: &[GuidMesh], path: &Path) -> Result<usize, Box<dyn std:
         let indices_byte_length = bin_buffer.len() - indices_offset;
 
         metas.push(MeshMeta {
-            name: gm.global_id.clone(),
+            name: gm.display_name(config.naming),
             ifc_type: gm.ifc_type.clone(),
             color: gm.color,
             positions_offset,

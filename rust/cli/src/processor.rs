@@ -4,6 +4,7 @@
 
 //! IFC processing: parse, extract geometry, and associate GUIDs.
 
+use crate::config::{ConvertConfig, ElementNaming};
 use ifc_lite_core::{build_entity_index, EntityDecoder, EntityScanner, IfcType};
 use ifc_lite_geometry::{calculate_normals, GeometryRouter, Mesh};
 use rayon::prelude::*;
@@ -13,14 +14,35 @@ use std::sync::Arc;
 /// A mesh associated with its IFC GlobalId and color.
 pub struct GuidMesh {
     pub global_id: String,
+    pub name: String,
     pub ifc_type: String,
+    pub step_id: u32,
     pub mesh: Mesh,
     pub color: [f32; 4],
+}
+
+impl GuidMesh {
+    /// Get the display name based on the naming config.
+    pub fn display_name(&self, naming: ElementNaming) -> String {
+        match naming {
+            ElementNaming::Guids => self.global_id.clone(),
+            ElementNaming::Names => {
+                if self.name.is_empty() {
+                    self.global_id.clone()
+                } else {
+                    self.name.clone()
+                }
+            }
+            ElementNaming::StepIds => format!("#{}", self.step_id),
+            ElementNaming::Types => self.ifc_type.clone(),
+        }
+    }
 }
 
 struct EntityJob {
     id: u32,
     global_id: String,
+    name: String,
     ifc_type: IfcType,
     start: usize,
     end: usize,
@@ -36,7 +58,7 @@ fn get_refs_from_list(
 }
 
 /// Process an IFC file and return meshes with their GlobalIds.
-pub fn process_ifc(content: &str) -> Vec<GuidMesh> {
+pub fn process_ifc(content: &str, config: &ConvertConfig) -> Vec<GuidMesh> {
     let entity_index = Arc::new(build_entity_index(content));
     let mut decoder = EntityDecoder::with_arc_index(content, entity_index.clone());
 
@@ -61,15 +83,22 @@ pub fn process_ifc(content: &str) -> Vec<GuidMesh> {
         }
 
         if ifc_lite_core::has_geometry_by_name(type_name) {
+            // Apply include/exclude filters
+            if !config.should_process(type_name) {
+                continue;
+            }
+
             if let Ok(entity) = decoder.decode_at(start, end) {
                 let global_id = entity
                     .get_string(0)
                     .unwrap_or("")
                     .to_string();
                 if !global_id.is_empty() {
+                    let name = entity.get_string(2).unwrap_or("").to_string();
                     entity_jobs.push(EntityJob {
                         id,
                         global_id,
+                        name,
                         ifc_type: entity.ifc_type,
                         start,
                         end,
@@ -140,7 +169,9 @@ pub fn process_ifc(content: &str) -> Vec<GuidMesh> {
 
             Some(GuidMesh {
                 global_id: job.global_id,
+                name: job.name,
                 ifc_type: job.ifc_type.name().to_string(),
+                step_id: job.id,
                 mesh,
                 color,
             })

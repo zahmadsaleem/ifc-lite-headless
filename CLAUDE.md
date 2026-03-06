@@ -12,8 +12,10 @@ Headless IFC processing toolkit. First feature: IFC to GLB conversion with GUID 
 ## Build & Run
 ```
 cargo build --release
-./target/release/ifc-lite-headless glb input.ifc -o output.glb
+./target/release/ifc-lite-headless input.ifc output.glb [options]
 ```
+
+IfcConvert-compatible CLI. See `--help` for all flags or `IFCCONVERT_COMPAT.md` for the compatibility checklist.
 
 ## Benchmark
 ```
@@ -21,8 +23,11 @@ python3 docker/benchmark.py
 ```
 
 ## Key Design Decisions
-- Subcommand architecture: `glb` is the first command, more to come
-- Node names in GLB = IFC GlobalId (attribute 0 of IfcProduct entities)
+- IfcConvert-compatible CLI (positional args, same flags)
+- Usable as both CLI and library (`config::ConvertConfig` + `processor::process_ifc`)
+- Default excludes: IfcOpeningElement, IfcSpace (matches IfcConvert)
+- Node names configurable: GlobalId (default), Name, StepId, Type
+- Z-up default (IfcConvert-compatible); `--y-up` for glTF-spec compliance
 - Colors extracted from IFC styled items, with type-based defaults
 - Parallel geometry processing via rayon
 - Nightly toolchain required (csgrs dependency uses edition2024)
