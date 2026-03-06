@@ -99,7 +99,7 @@ pub use processors::{
     SweptDiskSolidProcessor, TriangulatedFaceSetProcessor,
 };
 pub use profile::{Profile2D, Profile2DWithVoids, ProfileType, VoidInfo};
-pub use profiles::ProfileProcessor;
+pub use profiles::{segments_for_radius, ProfileProcessor};
 pub use router::{GeometryProcessor, GeometryRouter};
 pub use transform::{
     apply_rtc_offset, parse_axis2_placement_3d, parse_axis2_placement_3d_from_id,

@@ -28,6 +28,12 @@ impl ExtrudedAreaSolidProcessor {
             profile_processor: ProfileProcessor::new(schema),
         }
     }
+
+    pub fn with_deflection(schema: IfcSchema, deflection: f64) -> Self {
+        Self {
+            profile_processor: ProfileProcessor::with_deflection(schema, deflection),
+        }
+    }
 }
 
 impl GeometryProcessor for ExtrudedAreaSolidProcessor {

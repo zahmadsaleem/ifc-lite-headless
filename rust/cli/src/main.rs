@@ -75,6 +75,10 @@ struct Cli {
     /// Suppress progress bar
     #[arg(long)]
     no_progress: bool,
+
+    /// Deflection tolerance for curved geometry in meters [default: 0.001]
+    #[arg(long)]
+    deflection: Option<f64>,
 }
 
 impl Cli {
@@ -141,6 +145,9 @@ impl Cli {
         }
 
         config.no_progress = self.no_progress;
+        if let Some(d) = self.deflection {
+            config.deflection = d;
+        }
 
         config
     }

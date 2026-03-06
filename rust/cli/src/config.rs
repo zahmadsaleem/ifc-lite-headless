@@ -71,6 +71,11 @@ pub struct ConvertConfig {
     pub verbosity: Verbosity,
     /// Suppress progress bar
     pub no_progress: bool,
+    /// Deflection tolerance for curved geometry tessellation (in meters).
+    /// Controls the maximum chord error when approximating curves with line segments.
+    /// Smaller = more segments, higher quality, larger files.
+    /// Default: 0.001 (1mm)
+    pub deflection: f64,
 }
 
 impl Default for ConvertConfig {
@@ -86,6 +91,7 @@ impl Default for ConvertConfig {
             threads: 0,
             verbosity: Verbosity::default(),
             no_progress: false,
+            deflection: 0.001,
         }
     }
 }
