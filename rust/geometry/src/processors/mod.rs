@@ -27,9 +27,6 @@ mod mapped;
 mod swept;
 mod advanced;
 
-#[cfg(test)]
-mod tests;
-
 // Re-export all processor types
 pub use extrusion::ExtrudedAreaSolidProcessor;
 pub use tessellated::{TriangulatedFaceSetProcessor, PolygonalFaceSetProcessor};

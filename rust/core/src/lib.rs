@@ -75,7 +75,6 @@ pub mod legacy_entities;
 pub mod model_bounds;
 pub mod parser;
 pub mod schema_gen;
-pub mod streaming;
 pub mod units;
 
 pub use decoder::{build_entity_index, EntityDecoder, EntityIndex};
@@ -91,5 +90,4 @@ pub use legacy_entities::{get_legacy_entity_info, is_legacy_entity, map_legacy_t
 pub use model_bounds::{scan_model_bounds, scan_placement_bounds, ModelBounds};
 pub use parser::{parse_entity, EntityScanner, Token};
 pub use schema_gen::{AttributeValue, DecodedEntity, GeometryCategory, IfcSchema, ProfileCategory};
-pub use streaming::{parse_stream, ParseEvent, StreamConfig};
 pub use units::{extract_length_unit_scale, get_si_prefix_multiplier};

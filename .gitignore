@@ -1,59 +1,15 @@
-node_modules/
-package-lock.json
-dist/
-build/
-*.log
-.DS_Store
-.env
-.env.local
-*.tsbuildinfo
-
-# Rust
 target/
 Cargo.lock
 **/*.rs.bk
 *.pdb
-.vercel
+.DS_Store
+*.log
 
-# MkDocs build output
-site/
+# Private test data
+.private/
 
-# Rust compiled binaries in tests
-tests/test_geometry
+# Output directory
+.out/
 
-# Debug/test scripts in wasm package
-packages/wasm/debug-*.js
-packages/wasm/benchmark.js
-packages/wasm/test-parser.js
-
-# Cache directories
-**/.cache/
-.cache/
-
-# Temporary output files
-output.json
-*.output.json
-
-# Temporary test/analysis scripts
-test_*.sh
-*_ANALYSIS.md
-*_ISSUE.md
-*_FIX.md
-*_IMPROVEMENTS.md
-*_COMPLETE.md
-
-# WASM files - use packages/wasm/pkg/ as canonical source
-apps/viewer/public/ifc-lite_bg.wasm
-
-# Tauri/Claude temp files
-tmpclaude*
-nul
-
-# Claude Code local settings (user-specific)
+# Editor/tool local config
 .claude/settings.local.json
-
-# Local test models
-tests/models/local/*
-
-# Large IFC test fixtures (downloaded separately)
-rust/geometry/tests/*.ifc

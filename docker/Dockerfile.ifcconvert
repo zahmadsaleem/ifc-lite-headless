@@ -1,0 +1,11 @@
+FROM --platform=linux/amd64 ubuntu:22.04
+
+RUN apt-get update && apt-get install -y wget unzip && \
+    wget -q https://github.com/IfcOpenShell/IfcOpenShell/releases/download/ifcconvert-0.8.4/ifcconvert-0.8.4-linux64.zip -O /tmp/ifcconvert.zip && \
+    unzip /tmp/ifcconvert.zip -d /tmp/ifcconvert && \
+    cp /tmp/ifcconvert/IfcConvert /usr/local/bin/IfcConvert && \
+    chmod +x /usr/local/bin/IfcConvert && \
+    rm -rf /tmp/ifcconvert /tmp/ifcconvert.zip && \
+    apt-get remove -y wget unzip && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
+
+ENTRYPOINT ["IfcConvert"]

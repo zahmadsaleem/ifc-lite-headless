@@ -6,51 +6,14 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Geometry processing and mesh generation for IFC models"
-keywords = ["ifc", "bim", "geometry", "mesh", "aec"]
-categories = ["graphics", "parsing"]
-readme = "../../README.md"
-
-[features]
-default = []
-# csg = ["dep:manifold3d"]
-debug_geometry = []
 
 [dependencies]
-
-# CSG operations for opening subtraction
 csgrs = { version = "0.20", default-features = false, features = ["earcut", "f64"] }
-
-# Triangulation
 earcutr = "0.4"
-
-# 2D polygon boolean operations for profile-level void subtraction
 i_overlay = "1.9"
-
-# Core IFC parsing
-ifc-lite-core = { version = "1.1.6", path = "../core" }
-
-# Math library
+ifc-lite-core = { path = "../core" }
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
-
-# Parallel processing
 rayon = "1.10"
-
-# Fast hashing
 rustc-hash = "1.1"
-
-# Small vector optimization for frequently allocated small collections
 smallvec = "1.13"
-
-# Error handling
 thiserror = "1.0"
-
-# Web console logging (only for WASM)
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3", features = ["console"] }
-
-[dev-dependencies]
-approx = "0.5"
-
-[[example]]
-name = "color_extraction_test"
-path = "examples/color_extraction_test.rs"

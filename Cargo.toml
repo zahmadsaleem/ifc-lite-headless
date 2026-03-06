@@ -1,21 +1,21 @@
 [workspace]
-members = ["rust/core", "rust/geometry", "rust/wasm-bindings", "apps/server", "apps/desktop/src-tauri"]
+members = ["rust/core", "rust/geometry", "rust/cli"]
 resolver = "2"
 
 [workspace.package]
-version = "1.14.1"
+version = "2.0.0"
 edition = "2021"
 authors = ["IFC-Lite Contributors"]
 license = "MPL-2.0"
-repository = "https://github.com/louistrue/ifc-lite"
+repository = "https://github.com/zahmadsaleem/ifc-lite-headless"
 
 [profile.release]
-opt-level = 3           # Optimize for speed
-lto = true              # Link-time optimization
-codegen-units = 1       # Better optimization (slower compile)
-strip = true            # Strip symbols
-panic = 'abort'         # Smaller panic handler
-overflow-checks = false # Remove overflow checks in release
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = 'abort'
+overflow-checks = false
 
 [profile.release.package."*"]
 opt-level = 3
