@@ -17,3 +17,4 @@ Cargo.lock
 # Editor/tool local config
 .claude/settings.local.json
 docker/__pycache__/
+viewer/node_modules

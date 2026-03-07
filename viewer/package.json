@@ -1,0 +1,15 @@
+{
+  "name": "ifc-lite-viewer",
+  "private": true,
+  "scripts": {
+    "dev": "bun run server.ts"
+  },
+  "dependencies": {
+    "three": "^0.172.0",
+    "3d-tiles-renderer": "^0.3.39"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "@types/three": "^0.172.0"
+  }
+}

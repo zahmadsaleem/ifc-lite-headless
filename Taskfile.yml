@@ -1,0 +1,88 @@
+version: '3'
+
+vars:
+  BIN: ./target/release/ifc-lite-headless
+  TEST_ZONES: .private/testdata/zones.ifc
+  TEST_MODEL: .private/testdata/model.ifc
+  TEST_REF: .private/testdata/reference.json
+  TEST_TILESET: .private/testdata/tileset_output
+  VIEWER_DIR: viewer
+
+tasks:
+  build:
+    desc: Build release binary
+    cmds:
+      - cargo build --release
+
+  test:
+    desc: Run all tests
+    cmds:
+      - cargo test
+
+  # --- IFC Convert (legacy) ---
+
+  convert:
+    desc: Convert a single IFC to GLB
+    cmds:
+      - '{{.BIN}} {{.CLI_ARGS}}'
+
+  # --- 3D Tiles Pipeline ---
+
+  extract-ref:
+    desc: Extract reference from test zones.ifc
+    deps: [build]
+    cmds:
+      - '{{.BIN}} extract-ref {{.TEST_ZONES}} -o {{.TEST_REF}}'
+
+  tileset:
+    desc: Generate tileset from test model against reference
+    deps: [extract-ref]
+    cmds:
+      - rm -rf {{.TEST_TILESET}}
+      - '{{.BIN}} tileset --ref {{.TEST_REF}} --model {{.TEST_MODEL}} -o {{.TEST_TILESET}}'
+
+  pipeline:
+    desc: Run full pipeline (extract-ref + tileset)
+    cmds:
+      - task: extract-ref
+      - task: tileset
+
+  # --- Viewer ---
+
+  viewer:install:
+    desc: Install viewer dependencies
+    dir: '{{.VIEWER_DIR}}'
+    cmds:
+      - bun install
+    sources:
+      - package.json
+    generates:
+      - node_modules/.package-lock.json
+
+  viewer:dev:
+    desc: Start the Cesium viewer dev server
+    deps: [viewer:install]
+    dir: '{{.VIEWER_DIR}}'
+    cmds:
+      - bun run server.ts {{.TEST_TILESET}}
+
+  # --- Combined ---
+
+  dev:
+    desc: Build, generate tileset, and start viewer
+    cmds:
+      - task: pipeline
+      - task: viewer:dev
+
+  # --- Cleanup ---
+
+  clean:
+    desc: Clean build artifacts and test outputs
+    cmds:
+      - cargo clean
+      - rm -rf {{.TEST_TILESET}} {{.TEST_REF}}
+
+  clean:tileset:
+    desc: Clean only tileset output
+    cmds:
+      - rm -rf {{.TEST_TILESET}} {{.TEST_REF}}
