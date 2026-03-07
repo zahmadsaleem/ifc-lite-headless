@@ -113,7 +113,8 @@ impl Triangle {
 /// The csgrs BSP tree can infinite-recurse on certain polygon configurations
 /// (coplanar/near-coplanar faces cause repeated splitting with exponential growth).
 /// This limit prevents stack overflow in both native and WASM builds.
-const MAX_CSG_POLYGONS: usize = 2000;
+/// Set to 5000 to support walls with many openings (e.g. 7+ windows).
+const MAX_CSG_POLYGONS: usize = 5000;
 
 /// CSG Clipping Processor
 pub struct ClippingProcessor {
