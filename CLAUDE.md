@@ -2,12 +2,19 @@
 
 Headless IFC processing toolkit. First feature: IFC to GLB conversion with GUID node names.
 
+## Folder Philosophy
+- Code lives in `crates/`, docs live next to the code they describe (`crates/cli/docs/`)
+- Top-level only has project-wide files (README, Cargo.toml, CLAUDE.md, CI)
+- No sprawling root docs — scope docs to the crate they belong to
+
 ## Project Structure
-- `rust/core` - IFC/STEP parser (ifc-lite-core)
-- `rust/geometry` - Geometry processing, mesh generation (ifc-lite-geometry)
-- `rust/cli` - CLI binary with subcommands (ifc-lite-headless)
+- `crates/core` - IFC/STEP parser (ifc-lite-core)
+- `crates/geometry` - Geometry processing, mesh generation (ifc-lite-geometry)
+- `crates/cli` - CLI binary with subcommands (ifc-lite-headless)
+- `crates/cli/docs/` - CLI-scoped docs (IFCCONVERT_COMPAT, TILESET_SPEC, TILESET_CHECKLIST)
+- `bench/` - Benchmark infra and results (vs IfcConvert 0.8.4)
+- `viewer/` - 3D Tiles viewer (bun + three.js)
 - `.private/` - Test IFC files (gitignored)
-- `docker/` - Docker benchmark setup (vs IfcConvert 0.8.4)
 
 ## Build & Run
 ```
@@ -15,12 +22,17 @@ cargo build --release
 ./target/release/ifc-lite-headless input.ifc output.glb [options]
 ```
 
-IfcConvert-compatible CLI. See `--help` for all flags or `IFCCONVERT_COMPAT.md` for the compatibility checklist.
+IfcConvert-compatible CLI. See `--help` for all flags or `crates/cli/docs/IFCCONVERT_COMPAT.md` for the compatibility checklist.
 
-## Benchmark
-```
-python3 docker/benchmark.py
-```
+## Taskfile
+Uses [Task](https://taskfile.dev) for common workflows:
+- `task build` - Build release binary
+- `task test` - Run all tests
+- `task convert -- input.ifc output.glb` - Convert single IFC to GLB
+- `task pipeline` - Full 3D Tiles pipeline (extract-ref + tileset)
+- `task dev` - Build, generate tileset, and start viewer
+- `task viewer:dev` - Start the 3D Tiles viewer dev server
+- `task clean` - Clean build artifacts and test outputs
 
 ## Key Design Decisions
 - IfcConvert-compatible CLI (positional args, same flags)

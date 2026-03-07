@@ -563,7 +563,7 @@ Each group GLB contains all elements of one IFC class in one zone. Elements reta
 ### New modules
 
 ```
-rust/cli/src/
+crates/cli/src/
   tileset/
     mod.rs          # subcommand entry points (extract_ref, tileset)
     reference.rs    # extract-ref: walk spatial tree, compute volumes, write reference.json

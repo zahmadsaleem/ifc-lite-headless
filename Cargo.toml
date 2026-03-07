@@ -1,5 +1,5 @@
 [workspace]
-members = ["rust/core", "rust/geometry", "rust/cli"]
+members = ["crates/core", "crates/geometry", "crates/cli"]
 resolver = "2"
 
 [workspace.package]

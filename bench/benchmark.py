@@ -6,8 +6,8 @@ counts, and timing. Progress goes to stderr. GLB outputs are preserved in
 /tmp/benchmark_output/ for visual inspection.
 
 Usage:
-    python3 docker/benchmark.py > docker/benchmark_results.csv
-    python3 docker/benchmark.py file1.ifc file2.ifc > results.csv
+    python3 bench/benchmark.py > bench/benchmark_results.csv
+    python3 bench/benchmark.py file1.ifc file2.ifc > results.csv
 """
 
 import csv
