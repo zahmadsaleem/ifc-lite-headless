@@ -43,3 +43,14 @@ Uses [Task](https://taskfile.dev) for common workflows:
 - Colors extracted from IFC styled items, with type-based defaults
 - Parallel geometry processing via rayon
 - Nightly toolchain required (csgrs dependency uses edition2024)
+
+## Visual Debugging Workflow
+When working on 3D geometry, use this feedback loop:
+
+1. Edit code → `cargo build --release && task pipeline`
+2. Reload viewer in Chrome via MCP tools
+3. Inspect with `window.V` API — isolate by GUID, set camera, take screenshots
+4. Compare with reference screenshots from user
+5. Iterate
+
+The viewer runs at localhost:3000 (`task viewer:dev`). `window.V` has methods like `find()`, `isolate()`, `showAll()`, `zoomToFit()`, `setCamera()`, `stats()`, `inspect()`, `highlight()`, `wireframe()`, `xray()`. Use Chrome MCP tools (javascript_tool, computer screenshot) — no mouse needed.

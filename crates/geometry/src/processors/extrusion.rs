@@ -58,11 +58,19 @@ impl GeometryProcessor for ExtrudedAreaSolidProcessor {
             .resolve_ref(profile_attr)?
             .ok_or_else(|| Error::geometry("Failed to resolve SweptArea".to_string()))?;
 
-        let profile = self.profile_processor.process(&profile_entity, decoder)?;
+        // Check if this is a composite profile (web-ifc: profile.isComposite)
+        // Composite profiles extrude each sub-profile independently and merge
+        let is_composite = profile_entity.ifc_type == IfcType::IfcCompositeProfileDef;
 
-        if profile.outer.is_empty() {
-            return Ok(Mesh::new());
-        }
+        let profiles = if is_composite {
+            self.profile_processor.process_composite_parts(&profile_entity, decoder)?
+        } else {
+            let profile = self.profile_processor.process(&profile_entity, decoder)?;
+            if profile.outer.is_empty() {
+                return Ok(Mesh::new());
+            }
+            vec![profile]
+        };
 
         // Get extrusion direction
         let direction_attr = entity.get(2).ok_or_else(|| {
@@ -175,8 +183,15 @@ impl GeometryProcessor for ExtrudedAreaSolidProcessor {
             Some(shear_mat)
         };
 
-        // Extrude the profile
-        let mut mesh = extrude_profile(&profile, depth, transform)?;
+        // Extrude each profile and merge (web-ifc: loop over profile.profiles)
+        let mut mesh = Mesh::new();
+        for profile in &profiles {
+            if profile.outer.is_empty() {
+                continue;
+            }
+            let part = extrude_profile(profile, depth, transform)?;
+            mesh.merge(&part);
+        }
 
         // Apply Position transform
         if let Some(pos) = pos_transform {

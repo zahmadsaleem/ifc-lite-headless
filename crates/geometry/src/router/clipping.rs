@@ -3,6 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! Boolean clipping result extraction: half-space planes and profile drilling.
+#![allow(dead_code)]
 
 use super::GeometryRouter;
 use crate::{Error, Mesh, Point3, Result, Vector3};

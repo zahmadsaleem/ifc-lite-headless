@@ -74,6 +74,37 @@ impl ProfileProcessor {
         }
     }
 
+    /// Process composite profile into separate sub-profiles (for independent extrusion).
+    /// Unlike `process()` which merges sub-profiles as holes, this returns each sub-profile
+    /// independently — matching web-ifc's approach for IfcCompositeProfileDef extrusion.
+    pub fn process_composite_parts(
+        &self,
+        profile: &DecodedEntity,
+        decoder: &mut EntityDecoder,
+    ) -> Result<Vec<Profile2D>> {
+        let profiles_attr = profile
+            .get(2)
+            .ok_or_else(|| Error::geometry("Composite profile missing Profiles".to_string()))?;
+
+        let sub_profiles = decoder.resolve_ref_list(profiles_attr)?;
+
+        if sub_profiles.is_empty() {
+            return Err(Error::geometry(
+                "Composite profile has no sub-profiles".to_string(),
+            ));
+        }
+
+        let mut results = Vec::with_capacity(sub_profiles.len());
+        for sub_profile in &sub_profiles {
+            match self.process(sub_profile, decoder) {
+                Ok(p) if !p.outer.is_empty() => results.push(p),
+                _ => continue,
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Process parametric profiles (rectangle, circle, I-shape, etc.)
     #[inline]
     fn process_parametric(

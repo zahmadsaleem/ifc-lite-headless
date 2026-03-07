@@ -741,226 +741,95 @@ impl ClippingProcessor {
 
         // Convert back to our Mesh format
         match Self::csgrs_to_mesh(&result_csg) {
-            Ok(result) => {
-                // Clean up degenerate triangles (thin slivers from CSG numerical issues)
-                // Note: We don't use remove_triangles_inside_bounds here because it uses
-                // the opening's bounding box, which can incorrectly remove valid triangles
-                // for complex non-rectangular openings.
-                let cleaned = Self::remove_degenerate_triangles(&result, host_mesh);
-                Ok(cleaned)
-            }
+            Ok(result) => Ok(Self::remove_csg_artifacts(&result, host_mesh)),
             Err(_) => Ok(host_mesh.clone())
         }
     }
-    
-    /// Remove degenerate triangles from CSG result
-    /// 
-    /// CSG operations can create thin "sliver" triangles at intersection boundaries
-    /// due to numerical precision issues. This function removes triangles that:
-    /// 1. Have very small area (thin slivers)
-    /// 2. Are located inside the original host mesh bounds (not on the surface)
-    fn remove_degenerate_triangles(mesh: &Mesh, host_mesh: &Mesh) -> Mesh {
-        let (host_min, host_max) = host_mesh.bounds();
-        
-        // Convert host bounds to f64 for calculations
-        let host_min_x = host_min.x as f64;
-        let host_min_y = host_min.y as f64;
-        let host_min_z = host_min.z as f64;
-        let host_max_x = host_max.x as f64;
-        let host_max_y = host_max.y as f64;
-        let host_max_z = host_max.z as f64;
-        
-        // Calculate host dimensions to determine appropriate thresholds
-        let host_size_x = (host_max_x - host_min_x).abs();
-        let host_size_y = (host_max_y - host_min_y).abs();
-        let host_size_z = (host_max_z - host_min_z).abs();
-        let min_dim = host_size_x.min(host_size_y).min(host_size_z);
-        
-        // Minimum area threshold - triangles smaller than this are likely artifacts
-        // Use 0.1% of the smallest host dimension squared
-        let min_area = (min_dim * 0.001).powi(2);
-        
-        // Distance threshold for "inside" detection
-        let epsilon = min_dim * 0.01;
-        
-        let mut cleaned = Mesh::new();
-        
-        // Process each triangle
-        for i in (0..mesh.indices.len()).step_by(3) {
-            let i0 = mesh.indices[i] as usize;
-            let i1 = mesh.indices[i + 1] as usize;
-            let i2 = mesh.indices[i + 2] as usize;
-            
-            // Get vertex positions
-            let v0 = Point3::new(
-                mesh.positions[i0 * 3] as f64,
-                mesh.positions[i0 * 3 + 1] as f64,
-                mesh.positions[i0 * 3 + 2] as f64,
-            );
-            let v1 = Point3::new(
-                mesh.positions[i1 * 3] as f64,
-                mesh.positions[i1 * 3 + 1] as f64,
-                mesh.positions[i1 * 3 + 2] as f64,
-            );
-            let v2 = Point3::new(
-                mesh.positions[i2 * 3] as f64,
-                mesh.positions[i2 * 3 + 1] as f64,
-                mesh.positions[i2 * 3 + 2] as f64,
-            );
-            
-            // Calculate triangle area using cross product
-            let edge1 = v1 - v0;
-            let edge2 = v2 - v0;
-            let cross = edge1.cross(&edge2);
-            let area = cross.norm() / 2.0;
-            
-            // Check if triangle is degenerate (very small area)
-            if area < min_area {
-                continue;
-            }
-            
-            // Check if any vertex is significantly OUTSIDE the host bounds
-            // This catches CSG artifacts that create long thin triangles extending far from the model
-            let expansion = min_dim.max(1.0); // At least 1 meter expansion allowed
-            let far_outside = 
-                v0.x < (host_min_x - expansion) || v0.x > (host_max_x + expansion) ||
-                v0.y < (host_min_y - expansion) || v0.y > (host_max_y + expansion) ||
-                v0.z < (host_min_z - expansion) || v0.z > (host_max_z + expansion) ||
-                v1.x < (host_min_x - expansion) || v1.x > (host_max_x + expansion) ||
-                v1.y < (host_min_y - expansion) || v1.y > (host_max_y + expansion) ||
-                v1.z < (host_min_z - expansion) || v1.z > (host_max_z + expansion) ||
-                v2.x < (host_min_x - expansion) || v2.x > (host_max_x + expansion) ||
-                v2.y < (host_min_y - expansion) || v2.y > (host_max_y + expansion) ||
-                v2.z < (host_min_z - expansion) || v2.z > (host_max_z + expansion);
-            
-            if far_outside {
-                continue;
-            }
-            
-            // Check if triangle center is strictly inside the host bounds
-            // (not on the surface) - these are likely CSG artifacts
-            let center = Point3::new(
-                (v0.x + v1.x + v2.x) / 3.0,
-                (v0.y + v1.y + v2.y) / 3.0,
-                (v0.z + v1.z + v2.z) / 3.0,
-            );
-            
-            // Check if center is inside host bounds (with epsilon margin)
-            let inside_x = center.x > (host_min_x + epsilon) && center.x < (host_max_x - epsilon);
-            let inside_y = center.y > (host_min_y + epsilon) && center.y < (host_max_y - epsilon);
-            let inside_z = center.z > (host_min_z + epsilon) && center.z < (host_max_z - epsilon);
-            
-            // If triangle is strictly inside the host in ALL dimensions, it's likely an artifact
-            // Only remove if it's also relatively small
-            let max_area = min_dim * min_dim * 0.1; // 10% of smallest dimension squared
-            if inside_x && inside_y && inside_z && area < max_area {
-                continue;
-            }
-            
-            // Get normals
-            let n0 = Vector3::new(
-                mesh.normals[i0 * 3] as f64,
-                mesh.normals[i0 * 3 + 1] as f64,
-                mesh.normals[i0 * 3 + 2] as f64,
-            );
-            let n1 = Vector3::new(
-                mesh.normals[i1 * 3] as f64,
-                mesh.normals[i1 * 3 + 1] as f64,
-                mesh.normals[i1 * 3 + 2] as f64,
-            );
-            let n2 = Vector3::new(
-                mesh.normals[i2 * 3] as f64,
-                mesh.normals[i2 * 3 + 1] as f64,
-                mesh.normals[i2 * 3 + 2] as f64,
-            );
-            
-            // Add valid triangle to cleaned mesh
-            let base_idx = cleaned.vertex_count() as u32;
-            cleaned.add_vertex(v0, n0);
-            cleaned.add_vertex(v1, n1);
-            cleaned.add_vertex(v2, n2);
-            cleaned.add_triangle(base_idx, base_idx + 1, base_idx + 2);
-        }
-        
-        cleaned
-    }
 
-    /// Remove triangles that are completely inside the opening bounds
+    /// Remove CSG spike artifacts — degenerate triangles with extreme aspect ratios.
     ///
-    /// This removes artifact faces that CSG operations may leave inside circular/curved openings.
-    /// Note: Currently unused because it can incorrectly remove valid triangles for complex
-    /// non-rectangular openings. Kept for potential future use with simple rectangular openings.
-    #[allow(dead_code)]
-    fn remove_triangles_inside_bounds(
-        mesh: &Mesh,
-        open_min: Point3<f64>,
-        open_max: Point3<f64>,
-    ) -> Mesh {
-        let mut cleaned = Mesh::new();
-        
-        // Process each triangle
+    /// CSG can produce long thin "spike" triangles at intersection boundaries.
+    /// These have a very long edge relative to their area. Normal triangles from
+    /// wall/opening geometry have bounded aspect ratios.
+    ///
+    /// Also removes triangles that extend far beyond the host mesh bounds.
+    fn remove_csg_artifacts(mesh: &Mesh, host_mesh: &Mesh) -> Mesh {
+        let (host_min, host_max) = host_mesh.bounds();
+        let hmin = [host_min.x as f64, host_min.y as f64, host_min.z as f64];
+        let hmax = [host_max.x as f64, host_max.y as f64, host_max.z as f64];
+
+        let dims = [hmax[0] - hmin[0], hmax[1] - hmin[1], hmax[2] - hmin[2]];
+        let min_dim = dims[0].min(dims[1]).min(dims[2]).max(0.01);
+        let expansion = min_dim.max(1.0);
+
+        let mut cleaned = Mesh::with_capacity(mesh.vertex_count(), mesh.indices.len());
+
         for i in (0..mesh.indices.len()).step_by(3) {
-            let i0 = mesh.indices[i] as usize;
-            let i1 = mesh.indices[i + 1] as usize;
-            let i2 = mesh.indices[i + 2] as usize;
-            
-            // Get vertex positions
-            let v0 = Point3::new(
-                mesh.positions[i0 * 3] as f64,
-                mesh.positions[i0 * 3 + 1] as f64,
-                mesh.positions[i0 * 3 + 2] as f64,
-            );
-            let v1 = Point3::new(
-                mesh.positions[i1 * 3] as f64,
-                mesh.positions[i1 * 3 + 1] as f64,
-                mesh.positions[i1 * 3 + 2] as f64,
-            );
-            let v2 = Point3::new(
-                mesh.positions[i2 * 3] as f64,
-                mesh.positions[i2 * 3 + 1] as f64,
-                mesh.positions[i2 * 3 + 2] as f64,
-            );
-            
-            // Calculate triangle bounding box
-            let tri_min_x = v0.x.min(v1.x).min(v2.x);
-            let tri_max_x = v0.x.max(v1.x).max(v2.x);
-            let tri_min_y = v0.y.min(v1.y).min(v2.y);
-            let tri_max_y = v0.y.max(v1.y).max(v2.y);
-            let tri_min_z = v0.z.min(v1.z).min(v2.z);
-            let tri_max_z = v0.z.max(v1.z).max(v2.z);
-            
-            // Check if triangle is completely inside opening bounds (remove it)
-            if tri_min_x >= open_min.x && tri_max_x <= open_max.x &&
-               tri_min_y >= open_min.y && tri_max_y <= open_max.y &&
-               tri_min_z >= open_min.z && tri_max_z <= open_max.z {
-                // Triangle is inside opening - remove it
+            let ids = [
+                mesh.indices[i] as usize,
+                mesh.indices[i + 1] as usize,
+                mesh.indices[i + 2] as usize,
+            ];
+
+            let verts: [(f64, f64, f64); 3] = [
+                (mesh.positions[ids[0] * 3] as f64, mesh.positions[ids[0] * 3 + 1] as f64, mesh.positions[ids[0] * 3 + 2] as f64),
+                (mesh.positions[ids[1] * 3] as f64, mesh.positions[ids[1] * 3 + 1] as f64, mesh.positions[ids[1] * 3 + 2] as f64),
+                (mesh.positions[ids[2] * 3] as f64, mesh.positions[ids[2] * 3 + 1] as f64, mesh.positions[ids[2] * 3 + 2] as f64),
+            ];
+
+            // Check 1: vertex far outside host bounds
+            let mut far = false;
+            for &(px, py, pz) in &verts {
+                if px < hmin[0] - expansion || px > hmax[0] + expansion
+                    || py < hmin[1] - expansion || py > hmax[1] + expansion
+                    || pz < hmin[2] - expansion || pz > hmax[2] + expansion
+                {
+                    far = true;
+                    break;
+                }
+            }
+            if far {
                 continue;
             }
-            
-            // Triangle is not completely inside - keep it
-            let n0 = Vector3::new(
-                mesh.normals[i0 * 3] as f64,
-                mesh.normals[i0 * 3 + 1] as f64,
-                mesh.normals[i0 * 3 + 2] as f64,
-            );
-            let n1 = Vector3::new(
-                mesh.normals[i1 * 3] as f64,
-                mesh.normals[i1 * 3 + 1] as f64,
-                mesh.normals[i1 * 3 + 2] as f64,
-            );
-            let n2 = Vector3::new(
-                mesh.normals[i2 * 3] as f64,
-                mesh.normals[i2 * 3 + 1] as f64,
-                mesh.normals[i2 * 3 + 2] as f64,
-            );
-            
-            let base_idx = cleaned.vertex_count() as u32;
-            cleaned.add_vertex(v0, n0);
-            cleaned.add_vertex(v1, n1);
-            cleaned.add_vertex(v2, n2);
-            cleaned.add_triangle(base_idx, base_idx + 1, base_idx + 2);
+
+            // Check 2: spike detection — longest edge vs area
+            // A spike has longest_edge² / area >> normal geometry
+            let e0 = ((verts[1].0 - verts[0].0).powi(2) + (verts[1].1 - verts[0].1).powi(2) + (verts[1].2 - verts[0].2).powi(2)).sqrt();
+            let e1 = ((verts[2].0 - verts[1].0).powi(2) + (verts[2].1 - verts[1].1).powi(2) + (verts[2].2 - verts[1].2).powi(2)).sqrt();
+            let e2 = ((verts[0].0 - verts[2].0).powi(2) + (verts[0].1 - verts[2].1).powi(2) + (verts[0].2 - verts[2].2).powi(2)).sqrt();
+            let longest = e0.max(e1).max(e2);
+
+            let edge1 = Vector3::new(verts[1].0 - verts[0].0, verts[1].1 - verts[0].1, verts[1].2 - verts[0].2);
+            let edge2 = Vector3::new(verts[2].0 - verts[0].0, verts[2].1 - verts[0].1, verts[2].2 - verts[0].2);
+            let area = edge1.cross(&edge2).norm() * 0.5;
+
+            // Only filter if longest edge exceeds min host dimension AND
+            // the triangle is extremely thin (spike-like)
+            if longest > min_dim && area > 0.0 {
+                let aspect = longest * longest / area;
+                // Normal triangles: aspect ~2-8. Spikes: aspect > 1000
+                if aspect > 500.0 {
+                    continue;
+                }
+            }
+
+            let base = cleaned.vertex_count() as u32;
+            for &idx in &ids {
+                let p = Point3::new(
+                    mesh.positions[idx * 3] as f64,
+                    mesh.positions[idx * 3 + 1] as f64,
+                    mesh.positions[idx * 3 + 2] as f64,
+                );
+                let n = Vector3::new(
+                    mesh.normals[idx * 3] as f64,
+                    mesh.normals[idx * 3 + 1] as f64,
+                    mesh.normals[idx * 3 + 2] as f64,
+                );
+                cleaned.add_vertex(p, n);
+            }
+            cleaned.add_triangle(base, base + 1, base + 2);
         }
-        
+
         cleaned
     }
 

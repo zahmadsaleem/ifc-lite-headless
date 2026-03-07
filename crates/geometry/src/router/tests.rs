@@ -393,11 +393,11 @@ mod wall_profile_research {
         assert!(verts_c < 700, "Hybrid approach should be more efficient than full CSG");
     }
 
-    /// Test 7: Optimized Implementation Benchmark
+    /// Test 7: CSG void subtraction
     ///
-    /// Compare the new optimized plane-clipping approach with the CSG approach
+    /// Verify that CSG subtract produces valid geometry for wall openings
     #[test]
-    fn test_optimized_implementation_benchmark() {
+    fn test_csg_void_subtraction() {
         use crate::csg::ClippingProcessor;
 
         // Create chamfered wall
@@ -415,39 +415,16 @@ mod wall_profile_research {
         let open_min = Point3::new(6.495, -0.3, 0.8);
         let open_max = Point3::new(8.495, 0.0, 2.0);
 
-        // Get wall bounds for the optimized function
-        let (wall_min_f32, wall_max_f32) = wall_mesh.bounds();
-        let wall_min = Point3::new(wall_min_f32.x as f64, wall_min_f32.y as f64, wall_min_f32.z as f64);
-        let wall_max = Point3::new(wall_max_f32.x as f64, wall_max_f32.y as f64, wall_max_f32.z as f64);
-
-        // Test CSG approach (old)
         let clipper = ClippingProcessor::new();
         let csg_result = clipper.subtract_box(&wall_mesh, open_min, open_max).unwrap();
-        let csg_verts = csg_result.vertex_count();
-        let csg_tris = csg_result.triangle_count();
 
-        // Test optimized approach (new)
-        let router = GeometryRouter::new();
-        let opt_result = router.cut_rectangular_opening(&wall_mesh, open_min, open_max, wall_min, wall_max);
-        let opt_verts = opt_result.vertex_count();
-        let opt_tris = opt_result.triangle_count();
-
-        println!("\n=== Optimized vs CSG Comparison ===");
+        println!("\n=== CSG Void Subtraction ===");
         println!("Initial wall: {} verts, {} tris", initial_verts, initial_tris);
-        println!("CSG approach: {} verts, {} tris", csg_verts, csg_tris);
-        println!("Optimized approach: {} verts, {} tris", opt_verts, opt_tris);
+        println!("After CSG: {} verts, {} tris", csg_result.vertex_count(), csg_result.triangle_count());
 
-        // Both should produce valid geometry
         assert!(csg_result.vertex_count() > 0);
-        assert!(opt_result.vertex_count() > 0);
-
-        // Check bounds are preserved
         let (_csg_min, csg_max) = csg_result.bounds();
-        let (_opt_min, opt_max) = opt_result.bounds();
-
-        // Both should preserve chamfers (full length)
         assert!((csg_max.x - 10.0).abs() < 0.1);
-        assert!((opt_max.x - 10.0).abs() < 0.1);
     }
 
     /// Test 8: Chamfer Preservation Analysis
