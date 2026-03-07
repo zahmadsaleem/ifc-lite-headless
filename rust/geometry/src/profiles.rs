@@ -41,12 +41,12 @@ pub fn segments_for_radius(radius: f64, deflection: f64) -> usize {
 /// Profile processor - processes IFC profiles into 2D contours
 pub struct ProfileProcessor {
     schema: IfcSchema,
-    /// Deflection tolerance in model units (before unit scaling)
+    /// Deflection tolerance in model units
     deflection: f64,
 }
 
 impl ProfileProcessor {
-    /// Create new profile processor with default deflection (1mm in meters)
+    /// Create new profile processor with default deflection (0.001 model units)
     pub fn new(schema: IfcSchema) -> Self {
         Self { schema, deflection: 0.001 }
     }
@@ -1509,7 +1509,7 @@ mod tests {
         let profile = processor.process(&profile_entity, &mut decoder).unwrap();
 
         // Segment count is adaptive based on radius vs deflection
-        assert!(profile.outer.len() >= 8); // At least MIN_CIRCLE_SEGMENTS
+        assert!(profile.outer.len() >= MIN_CIRCLE_SEGMENTS);
         assert!(!profile.outer.is_empty());
     }
 

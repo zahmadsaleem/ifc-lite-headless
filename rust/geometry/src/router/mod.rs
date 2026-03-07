@@ -67,7 +67,7 @@ pub struct GeometryRouter {
     /// Subtracted from all world positions in f64 before converting to f32
     /// This preserves precision for georeferenced models (e.g., Swiss UTM)
     rtc_offset: (f64, f64, f64),
-    /// Deflection tolerance for curved geometry tessellation (meters)
+    /// Deflection tolerance for curved geometry tessellation (model units)
     deflection: f64,
 }
 
@@ -112,7 +112,7 @@ impl GeometryRouter {
         router
     }
 
-    /// Get the deflection tolerance
+    /// Get the deflection tolerance (in model units)
     pub fn deflection(&self) -> f64 {
         self.deflection
     }
