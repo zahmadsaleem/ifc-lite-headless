@@ -831,7 +831,118 @@ impl ClippingProcessor {
             cleaned.add_triangle(base, base + 1, base + 2);
         }
 
-        cleaned
+        // Remove disconnected small fragments via connected-component analysis.
+        // CSG can produce small floating pieces (caps, slivers) disconnected from
+        // the main body. Keep only the largest connected component.
+        Self::remove_small_components(&cleaned)
+    }
+
+    /// Find connected components by shared vertices and keep the largest.
+    ///
+    /// Two triangles are "connected" if they share a vertex position (within epsilon).
+    /// Uses union-find for O(n·α(n)) performance.
+    fn remove_small_components(mesh: &Mesh) -> Mesh {
+        let tri_count = mesh.triangle_count();
+        if tri_count <= 1 {
+            return mesh.clone();
+        }
+
+        // Quantize vertex positions to grid cells for fast neighbor lookup.
+        // Use epsilon-based hashing: positions within 0.01 units share a cell.
+        use rustc_hash::FxHashMap;
+        let eps = 0.01_f32;
+        let inv_eps = 1.0 / eps;
+
+        // Map: quantized position key -> list of triangle indices that use it
+        let mut pos_to_tris: FxHashMap<(i64, i64, i64), Vec<usize>> = FxHashMap::default();
+
+        for tri_idx in 0..tri_count {
+            let base = tri_idx * 3;
+            for k in 0..3 {
+                let vi = mesh.indices[base + k] as usize;
+                let px = mesh.positions[vi * 3];
+                let py = mesh.positions[vi * 3 + 1];
+                let pz = mesh.positions[vi * 3 + 2];
+                let key = (
+                    (px * inv_eps).round() as i64,
+                    (py * inv_eps).round() as i64,
+                    (pz * inv_eps).round() as i64,
+                );
+                pos_to_tris.entry(key).or_default().push(tri_idx);
+            }
+        }
+
+        // Union-Find
+        let mut parent: Vec<usize> = (0..tri_count).collect();
+        let mut rank: Vec<u8> = vec![0; tri_count];
+
+        fn find(parent: &mut [usize], x: usize) -> usize {
+            let mut r = x;
+            while parent[r] != r { r = parent[r]; }
+            let mut c = x;
+            while c != r { let next = parent[c]; parent[c] = r; c = next; }
+            r
+        }
+
+        fn union(parent: &mut [usize], rank: &mut [u8], a: usize, b: usize) {
+            let ra = find(parent, a);
+            let rb = find(parent, b);
+            if ra == rb { return; }
+            if rank[ra] < rank[rb] { parent[ra] = rb; }
+            else if rank[ra] > rank[rb] { parent[rb] = ra; }
+            else { parent[rb] = ra; rank[ra] += 1; }
+        }
+
+        // Union triangles that share a vertex position
+        for tris in pos_to_tris.values() {
+            if tris.len() > 1 {
+                let first = tris[0];
+                for &t in &tris[1..] {
+                    union(&mut parent, &mut rank, first, t);
+                }
+            }
+        }
+
+        // Count component sizes
+        let mut comp_size: FxHashMap<usize, usize> = FxHashMap::default();
+        for i in 0..tri_count {
+            *comp_size.entry(find(&mut parent, i)).or_default() += 1;
+        }
+
+        // If only one component, nothing to remove
+        if comp_size.len() <= 1 {
+            return mesh.clone();
+        }
+
+        // Find the largest component
+        let &largest_root = comp_size.iter().max_by_key(|(_, &sz)| sz).unwrap().0;
+
+        // Build output mesh with only triangles from the largest component
+        let mut result = Mesh::with_capacity(mesh.vertex_count(), mesh.indices.len());
+        for tri_idx in 0..tri_count {
+            if find(&mut parent, tri_idx) != largest_root {
+                continue;
+            }
+            let base_in = tri_idx * 3;
+            let base_out = result.vertex_count() as u32;
+            for k in 0..3 {
+                let vi = mesh.indices[base_in + k] as usize;
+                let p = Point3::new(
+                    mesh.positions[vi * 3] as f64,
+                    mesh.positions[vi * 3 + 1] as f64,
+                    mesh.positions[vi * 3 + 2] as f64,
+                );
+                let n = Vector3::new(
+                    mesh.normals[vi * 3] as f64,
+                    mesh.normals[vi * 3 + 1] as f64,
+                    mesh.normals[vi * 3 + 2] as f64,
+                );
+                result.add_vertex(p, n);
+            }
+            result.add_triangle(base_out, base_out + 1, base_out + 2);
+        }
+
+        result
     }
 
     /// Union two meshes together using csgrs CSG boolean operations

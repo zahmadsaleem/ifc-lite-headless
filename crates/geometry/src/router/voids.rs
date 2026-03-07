@@ -15,7 +15,7 @@
 use super::GeometryRouter;
 use crate::csg::ClippingProcessor;
 use crate::{Mesh, Result};
-use ifc_lite_core::{DecodedEntity, EntityDecoder};
+use ifc_lite_core::{DecodedEntity, EntityDecoder, IfcType};
 use rustc_hash::FxHashMap;
 
 impl GeometryRouter {
@@ -23,8 +23,12 @@ impl GeometryRouter {
     ///
     /// Uses full 3D mesh CSG subtraction (like web-ifc):
     /// 1. Process the host element to get its mesh
-    /// 2. For each IfcOpeningElement, process it to get its mesh
-    /// 3. CSG subtract each opening mesh from the host
+    /// 2. For each IfcOpeningElement, get its individual representation items
+    /// 3. CSG subtract each item mesh from the host separately
+    ///
+    /// Opening elements with multiple representation items (e.g. two extrusions
+    /// approaching from opposite sides) are processed item-by-item to avoid
+    /// non-manifold merged meshes that confuse CSG.
     pub fn process_element_with_voids(
         &self,
         element: &DecodedEntity,
@@ -57,29 +61,123 @@ impl GeometryRouter {
                 Err(_) => continue,
             };
 
-            let opening_mesh = match self.process_element(&opening_entity, decoder) {
-                Ok(m) if !m.is_empty() => m,
-                _ => continue,
-            };
+            // Get individual opening item meshes to avoid non-manifold issues
+            let opening_meshes = self.get_opening_item_meshes(&opening_entity, decoder);
 
-            // Validate opening mesh
-            if !opening_mesh.positions.iter().all(|&v| v.is_finite())
-                || opening_mesh.positions.len() < 9
-            {
-                continue;
-            }
-
-            // CSG subtract opening from host
-            match clipper.subtract_mesh(&result, &opening_mesh) {
-                Ok(csg_result) if !csg_result.is_empty() && csg_result.triangle_count() >= 4 => {
-                    result = csg_result;
+            for opening_mesh in opening_meshes {
+                // Validate opening mesh
+                if !opening_mesh.positions.iter().all(|&v| v.is_finite())
+                    || opening_mesh.positions.len() < 9
+                {
+                    continue;
                 }
-                _ => {
-                    // CSG failed or produced degenerate result — keep previous
+
+                // CSG subtract opening from host
+                match clipper.subtract_mesh(&result, &opening_mesh) {
+                    Ok(csg_result)
+                        if !csg_result.is_empty() && csg_result.triangle_count() >= 4 =>
+                    {
+                        result = csg_result;
+                    }
+                    _ => {
+                        // CSG failed or produced degenerate result — keep previous
+                    }
                 }
             }
         }
 
         Ok(result)
+    }
+
+    /// Get individual representation item meshes for an opening element.
+    ///
+    /// Instead of merging all items into one mesh (which creates non-manifold
+    /// geometry when items share faces), returns each item as a separate mesh.
+    /// This allows CSG to process each watertight solid individually.
+    fn get_opening_item_meshes(
+        &self,
+        opening: &DecodedEntity,
+        decoder: &mut EntityDecoder,
+    ) -> Vec<Mesh> {
+        let mut meshes = Vec::new();
+
+        // Get representation
+        let repr_attr = match opening.get(6) {
+            Some(attr) if !attr.is_null() => attr,
+            _ => return meshes,
+        };
+
+        let repr = match decoder.resolve_ref(repr_attr) {
+            Ok(Some(r)) if r.ifc_type == IfcType::IfcProductDefinitionShape => r,
+            _ => return meshes,
+        };
+
+        let repr_list_attr = match repr.get(2) {
+            Some(attr) => attr,
+            None => return meshes,
+        };
+
+        let representations = match decoder.resolve_ref_list(repr_list_attr) {
+            Ok(r) => r,
+            Err(_) => return meshes,
+        };
+
+        // Get placement transform
+        let placement_transform = self
+            .get_placement_transform_from_element(opening, decoder)
+            .ok();
+
+        for shape_rep in &representations {
+            if shape_rep.ifc_type != IfcType::IfcShapeRepresentation {
+                continue;
+            }
+
+            // Only process Body/SweptSolid/Tessellation etc.
+            if let Some(rep_type_attr) = shape_rep.get(2) {
+                if let Some(rep_type) = rep_type_attr.as_string() {
+                    if !matches!(
+                        rep_type,
+                        "Body"
+                            | "SweptSolid"
+                            | "SolidModel"
+                            | "Brep"
+                            | "CSG"
+                            | "Clipping"
+                            | "Tessellation"
+                    ) {
+                        continue;
+                    }
+                }
+            }
+
+            let items_attr = match shape_rep.get(3) {
+                Some(attr) => attr,
+                None => continue,
+            };
+
+            let items = match decoder.resolve_ref_list(items_attr) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+
+            // Process each item individually
+            for item in &items {
+                if let Ok(mut mesh) = self.process_representation_item(item, decoder) {
+                    if !mesh.is_empty() {
+                        // Apply placement
+                        if let Some(ref transform) = placement_transform {
+                            let mut scaled = *transform;
+                            self.scale_transform(&mut scaled);
+                            self.transform_mesh(&mut mesh, &scaled);
+                        }
+                        meshes.push(mesh);
+                    }
+                }
+            }
+        }
+
+        // If we got multiple items, return them individually.
+        // If only one item (common case), just return it as-is.
+        meshes
     }
 }
