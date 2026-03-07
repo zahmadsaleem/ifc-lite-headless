@@ -2,24 +2,28 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 pub mod config;
-mod glb;
-mod processor;
+pub mod glb;
+pub mod processor;
+mod tileset;
 
 use config::{ConvertConfig, ElementNaming, EntityFilter, FilterMode, UpAxis, Verbosity};
 
 #[derive(Parser)]
 #[command(
     name = "ifc-lite-headless",
-    about = "IfcConvert-compatible IFC geometry converter",
+    about = "IfcConvert-compatible IFC geometry converter with 3D Tiles support",
     version
 )]
 struct Cli {
-    /// Input IFC file
-    input: PathBuf,
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Input IFC file (IfcConvert-compatible positional arg)
+    input: Option<PathBuf>,
 
     /// Output file (format inferred from extension; default: <input>.glb)
     output: Option<PathBuf>,
@@ -79,6 +83,86 @@ struct Cli {
     /// Deflection tolerance for curved geometry in meters [default: 0.001]
     #[arg(long)]
     deflection: Option<f64>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Extract spatial structure from an IFC file into a reusable reference.json
+    ExtractRef {
+        /// Input IFC file
+        input: PathBuf,
+
+        /// Output reference.json path
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Spatial entity type to use as leaf zones [default: storey]
+        #[arg(long, default_value = "storey")]
+        leaf_type: String,
+
+        /// How to compute zone volumes: elevation, contained, bbox [default: elevation]
+        #[arg(long, default_value = "elevation")]
+        volume_mode: String,
+
+        /// Increase log verbosity
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbose: u8,
+
+        /// Suppress output
+        #[arg(short, long)]
+        quiet: bool,
+    },
+
+    /// Generate a 3D Tiles 1.1 tileset from IFC models against a reference
+    Tileset {
+        /// Path to reference.json (from extract-ref)
+        #[arg(long = "ref")]
+        reference: PathBuf,
+
+        /// IFC model files to tile (repeatable)
+        #[arg(long = "model", num_args = 1)]
+        models: Vec<PathBuf>,
+
+        /// Override model names (one per --model, in order)
+        #[arg(long = "model-name", num_args = 1)]
+        model_names: Vec<String>,
+
+        /// Output directory
+        #[arg(short, long, default_value = "./tileset")]
+        output: PathBuf,
+
+        /// Exclude entities of these IFC types [default: IfcOpeningElement IfcSpace]
+        #[arg(long, num_args = 1.., value_delimiter = ' ')]
+        exclude: Option<Vec<String>>,
+
+        /// Include only entities of these IFC types
+        #[arg(long, num_args = 1.., value_delimiter = ' ')]
+        include: Option<Vec<String>>,
+
+        /// Set Y as up axis (default: Z-up)
+        #[arg(long)]
+        y_up: bool,
+
+        /// Number of processing threads (default: all cores)
+        #[arg(short = 'j', long = "threads")]
+        threads: Option<usize>,
+
+        /// Deflection tolerance for curved geometry
+        #[arg(long)]
+        deflection: Option<f64>,
+
+        /// Increase log verbosity
+        #[arg(short, long, action = clap::ArgAction::Count)]
+        verbose: u8,
+
+        /// Suppress output
+        #[arg(short, long)]
+        quiet: bool,
+
+        /// Suppress progress bar
+        #[arg(long)]
+        no_progress: bool,
+    },
 }
 
 impl Cli {
@@ -167,47 +251,185 @@ fn normalize_types(types: &[String]) -> Vec<String> {
         .collect()
 }
 
+fn build_tileset_config(
+    exclude: &Option<Vec<String>>,
+    include: &Option<Vec<String>>,
+    y_up: bool,
+    threads: Option<usize>,
+    deflection: Option<f64>,
+    verbose: u8,
+    quiet: bool,
+    no_progress: bool,
+) -> ConvertConfig {
+    let mut config = ConvertConfig::default();
+
+    if let Some(ref types) = include {
+        config.include.push(EntityFilter {
+            mode: FilterMode::Direct,
+            types: normalize_types(types),
+        });
+    }
+    if let Some(ref types) = exclude {
+        config.exclude.clear();
+        config.exclude.push(EntityFilter {
+            mode: FilterMode::Direct,
+            types: normalize_types(types),
+        });
+    }
+    if y_up {
+        config.up_axis = UpAxis::Y;
+    }
+    if let Some(t) = threads {
+        config.threads = t;
+    }
+    if let Some(d) = deflection {
+        config.deflection = d;
+    }
+    if quiet {
+        config.verbosity = Verbosity::Quiet;
+    } else if verbose > 0 {
+        config.verbosity = Verbosity::Verbose;
+    }
+    config.no_progress = no_progress;
+    config
+}
+
 fn main() {
     let cli = Cli::parse();
-    let config = cli.into_config();
 
-    // Configure thread pool
-    if config.threads > 0 {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(config.threads)
-            .build_global()
-            .ok();
-    }
+    match cli.command {
+        Some(Commands::ExtractRef {
+            input,
+            output,
+            leaf_type,
+            volume_mode,
+            verbose,
+            quiet,
+        }) => {
+            let verbosity = if quiet {
+                Verbosity::Quiet
+            } else if verbose > 0 {
+                Verbosity::Verbose
+            } else {
+                Verbosity::Normal
+            };
 
-    let input = &cli.input;
-    let output = cli.output.clone().unwrap_or_else(|| {
-        let stem = input.file_stem().unwrap_or_default();
-        PathBuf::from(format!("{}.glb", stem.to_string_lossy()))
-    });
+            let output = output.unwrap_or_else(|| {
+                let stem = input.file_stem().unwrap_or_default();
+                PathBuf::from(format!("{}.reference.json", stem.to_string_lossy()))
+            });
 
-    // Validate output extension
-    let ext = output
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+            if let Err(e) =
+                tileset::reference::extract_reference(&input, &output, &leaf_type, &volume_mode, verbosity)
+            {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        Some(Commands::Tileset {
+            reference,
+            models,
+            model_names,
+            output,
+            exclude,
+            include,
+            y_up,
+            threads,
+            deflection,
+            verbose,
+            quiet,
+            no_progress,
+        }) => {
+            if models.is_empty() {
+                eprintln!("Error: at least one --model is required");
+                std::process::exit(1);
+            }
 
-    if ext != "glb" {
-        eprintln!(
-            "Error: unsupported output format '.{}'. Currently only .glb is supported.",
-            ext
-        );
-        std::process::exit(1);
-    }
+            let config = build_tileset_config(
+                &exclude, &include, y_up, threads, deflection, verbose, quiet, no_progress,
+            );
 
-    // Ensure output directory exists
-    if let Some(parent) = output.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).ok();
+            // Configure thread pool
+            if config.threads > 0 {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(config.threads)
+                    .build_global()
+                    .ok();
+            }
+
+            // Pair models with names
+            let model_pairs: Vec<(PathBuf, String)> = models
+                .into_iter()
+                .enumerate()
+                .map(|(i, path)| {
+                    let name = if i < model_names.len() {
+                        model_names[i].clone()
+                    } else {
+                        path.file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| format!("model_{}", i))
+                    };
+                    (path, name)
+                })
+                .collect();
+
+            if let Err(e) =
+                tileset::tiler::generate_tileset(&reference, &model_pairs, &output, &config)
+            {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
+        None => {
+            // IfcConvert-compatible mode: positional args
+            let input = match cli.input {
+                Some(ref p) => p,
+                None => {
+                    eprintln!("Error: input file required. Use --help for usage.");
+                    std::process::exit(1);
+                }
+            };
+
+            let config = cli.into_config();
+
+            // Configure thread pool
+            if config.threads > 0 {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(config.threads)
+                    .build_global()
+                    .ok();
+            }
+
+            let output = cli.output.clone().unwrap_or_else(|| {
+                let stem = input.file_stem().unwrap_or_default();
+                PathBuf::from(format!("{}.glb", stem.to_string_lossy()))
+            });
+
+            // Validate output extension
+            let ext = output
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+
+            if ext != "glb" {
+                eprintln!(
+                    "Error: unsupported output format '.{}'. Currently only .glb is supported.",
+                    ext
+                );
+                std::process::exit(1);
+            }
+
+            // Ensure output directory exists
+            if let Some(parent) = output.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+            }
+
+            run_glb(input, &output, &config);
         }
     }
-
-    run_glb(input, &output, &config);
 }
 
 fn run_glb(input: &PathBuf, output: &PathBuf, config: &ConvertConfig) {

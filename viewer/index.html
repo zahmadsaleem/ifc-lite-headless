@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IFC-Lite 3D Tiles Viewer</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e2e; }
+    canvas { display: block; }
+    #controls {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: rgba(0,0,0,0.85);
+      color: #fff;
+      padding: 12px 16px;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: 13px;
+      max-height: 90vh;
+      overflow-y: auto;
+      min-width: 240px;
+    }
+    #controls h3 { margin-bottom: 8px; font-size: 14px; }
+    #stats {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid #555;
+      color: #aaa;
+    }
+    #error { color: #ff5252; margin-top: 8px; }
+    details { margin: 4px 0; }
+    details summary { cursor: pointer; padding: 2px 0; }
+    details summary:hover { color: #4fc3f7; }
+    .indent { padding-left: 16px; }
+    .class-item {
+      display: block;
+      padding: 1px 0 1px 16px;
+      color: #aaa;
+      font-size: 12px;
+    }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "/node_modules/three/build/three.module.js",
+        "three/examples/jsm/": "/node_modules/three/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="controls">
+    <h3>IFC-Lite Tileset Viewer</h3>
+    <div id="zoneTree">Loading...</div>
+    <div id="stats"></div>
+    <div id="error"></div>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+
+    // --- Three.js setup ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x1e1e2e);
+
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10000);
+    camera.position.set(200, 200, 200);
+    camera.up.set(0, 0, 1); // Z-up to match IFC
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.1;
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(100, 200, 300);
+    scene.add(dirLight);
+
+    const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    dirLight2.position.set(-100, -100, 100);
+    scene.add(dirLight2);
+
+    // Grid
+    const gridHelper = new THREE.GridHelper(500, 50, 0x444466, 0x333355);
+    gridHelper.rotation.x = Math.PI / 2; // rotate to XY plane (Z-up)
+    scene.add(gridHelper);
+
+    // Axes
+    const axesHelper = new THREE.AxesHelper(20);
+    scene.add(axesHelper);
+
+    // Resize
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // --- URL params for filtering ---
+    // ?classes=IfcWall,IfcSlab  - only load these IFC classes
+    // ?zones=Plan_01,Plan_02    - only load these zones (matches zone path segments)
+    // ?model=architectural      - which model subdir to load (default: model)
+    const params = new URLSearchParams(window.location.search);
+    const filterClasses = params.get('classes')?.split(',').map(s => s.trim()) || null;
+    const filterZones = params.get('zones')?.split(',').map(s => s.trim()) || null;
+    const modelName = params.get('model') || 'model';
+
+    const TILESET_BASE = `/tileset/${modelName}`;
+
+    function matchesFilter(tile) {
+      const meta = tile.metadata;
+      if (!meta || meta.class !== 'IfcClassGroup') return true; // non-leaf nodes pass
+
+      const ifcClass = meta.properties?.ifcClass || '';
+      const zone = meta.properties?.zone || '';
+
+      if (filterClasses && !filterClasses.includes(ifcClass)) return false;
+      if (filterZones && !filterZones.some(z => zone.includes(z))) return false;
+      return true;
+    }
+
+    async function loadTileset() {
+      const errorDiv = document.getElementById('error');
+      const zoneTree = document.getElementById('zoneTree');
+
+      try {
+        const tilesetJson = await fetch(`${TILESET_BASE}/tileset.json`).then(r => r.json());
+
+        // Collect all GLB URIs from tile tree, applying filters
+        const tiles = [];
+        collectTiles(tilesetJson.root, tiles);
+
+        const activeFilters = [];
+        if (filterClasses) activeFilters.push(`classes=${filterClasses.join(',')}`);
+        if (filterZones) activeFilters.push(`zones=${filterZones.join(',')}`);
+
+        zoneTree.innerHTML = '';
+        if (activeFilters.length > 0) {
+          const filterDiv = document.createElement('div');
+          filterDiv.style.cssText = 'color:#4fc3f7;margin-bottom:8px;font-size:11px';
+          filterDiv.textContent = `Filter: ${activeFilters.join(' | ')}`;
+          zoneTree.appendChild(filterDiv);
+        }
+        buildZoneUI(tilesetJson.root, zoneTree);
+
+        document.getElementById('stats').textContent = `Loading ${tiles.length} tiles...`;
+
+        // Load all GLBs
+        const gltfLoader = new (await import('three/examples/jsm/loaders/GLTFLoader.js')).GLTFLoader();
+
+        let loaded = 0;
+        const allBounds = new THREE.Box3();
+
+        const loadPromises = tiles.map(tile => {
+          const url = `${TILESET_BASE}/${tile.uri}`;
+          return new Promise((resolve) => {
+            gltfLoader.load(url, (gltf) => {
+              scene.add(gltf.scene);
+
+              const box = new THREE.Box3().setFromObject(gltf.scene);
+              allBounds.union(box);
+
+              loaded++;
+              document.getElementById('stats').textContent = `Loaded ${loaded}/${tiles.length} tiles`;
+              resolve(gltf);
+            }, undefined, (err) => {
+              console.warn(`Failed to load ${url}:`, err);
+              loaded++;
+              document.getElementById('stats').textContent = `Loaded ${loaded}/${tiles.length} tiles`;
+              resolve(null);
+            });
+          });
+        });
+
+        await Promise.all(loadPromises);
+
+        // Center camera on model
+        if (!allBounds.isEmpty()) {
+          const center = allBounds.getCenter(new THREE.Vector3());
+          const size = allBounds.getSize(new THREE.Vector3());
+          const maxDim = Math.max(size.x, size.y, size.z);
+
+          controls.target.copy(center);
+          camera.position.set(
+            center.x + maxDim * 0.8,
+            center.y - maxDim * 0.8,
+            center.z + maxDim * 0.5
+          );
+          controls.update();
+
+          gridHelper.position.set(center.x, center.y, allBounds.min.z);
+
+          document.getElementById('stats').textContent =
+            `${loaded} tiles loaded | Center: (${center.x.toFixed(0)}, ${center.y.toFixed(0)}, ${center.z.toFixed(0)})`;
+        }
+
+      } catch (err) {
+        errorDiv.textContent = `Error: ${err.message}`;
+        zoneTree.textContent = '';
+        console.error(err);
+      }
+    }
+
+    function collectTiles(node, tiles) {
+      if (node.content && node.content.uri && node.content.uri.endsWith('.glb')) {
+        if (matchesFilter(node)) {
+          tiles.push({
+            uri: node.content.uri,
+            metadata: node.metadata,
+          });
+        }
+      }
+      if (node.children) {
+        for (const child of node.children) {
+          collectTiles(child, tiles);
+        }
+      }
+    }
+
+    function buildZoneUI(node, container) {
+      if (!node.children) return;
+      for (const child of node.children) {
+        const meta = child.metadata;
+        if (!meta) continue;
+
+        if (meta.class === 'Zone') {
+          const details = document.createElement('details');
+          details.open = true;
+          const summary = document.createElement('summary');
+          summary.textContent = meta.properties?.name || 'Zone';
+          details.appendChild(summary);
+
+          const inner = document.createElement('div');
+          inner.className = 'indent';
+          if (child.children) {
+            buildZoneUI(child, inner);
+          }
+          details.appendChild(inner);
+          container.appendChild(details);
+
+        } else if (meta.class === 'IfcClassGroup') {
+          const cls = meta.properties?.ifcClass || '?';
+          const count = meta.properties?.elementCount || 0;
+          const active = matchesFilter(child);
+
+          const span = document.createElement('span');
+          span.className = 'class-item';
+          span.textContent = `${cls} (${count})`;
+          if (!active) span.style.cssText = 'text-decoration:line-through;opacity:0.4';
+          container.appendChild(span);
+        }
+      }
+    }
+
+    // Animation loop
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+    animate();
+
+    loadTileset();
+  </script>
+</body>
+</html>
