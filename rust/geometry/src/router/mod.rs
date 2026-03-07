@@ -67,11 +67,18 @@ pub struct GeometryRouter {
     /// Subtracted from all world positions in f64 before converting to f32
     /// This preserves precision for georeferenced models (e.g., Swiss UTM)
     rtc_offset: (f64, f64, f64),
+    /// Deflection tolerance for curved geometry tessellation (model units)
+    deflection: f64,
 }
 
 impl GeometryRouter {
     /// Create new router with default processors
     pub fn new() -> Self {
+        Self::with_deflection(0.001)
+    }
+
+    /// Create new router with custom deflection tolerance
+    pub fn with_deflection(deflection: f64) -> Self {
         let schema = IfcSchema::new();
         let schema_clone = schema.clone();
         let mut router = Self {
@@ -80,28 +87,34 @@ impl GeometryRouter {
             mapped_item_cache: RefCell::new(FxHashMap::default()),
             faceted_brep_cache: RefCell::new(FxHashMap::default()),
             geometry_hash_cache: RefCell::new(FxHashMap::default()),
-            unit_scale: 1.0, // Default to base meters
-            rtc_offset: (0.0, 0.0, 0.0), // Default to no offset
+            unit_scale: 1.0,
+            rtc_offset: (0.0, 0.0, 0.0),
+            deflection,
         };
 
-        // Register default P0 processors
-        router.register(Box::new(ExtrudedAreaSolidProcessor::new(
-            schema_clone.clone(),
+        // Register processors with deflection tolerance
+        router.register(Box::new(ExtrudedAreaSolidProcessor::with_deflection(
+            schema_clone.clone(), deflection,
         )));
         router.register(Box::new(TriangulatedFaceSetProcessor::new()));
         router.register(Box::new(PolygonalFaceSetProcessor::new()));
         router.register(Box::new(MappedItemProcessor::new()));
         router.register(Box::new(FacetedBrepProcessor::new()));
         router.register(Box::new(BooleanClippingProcessor::new()));
-        router.register(Box::new(SweptDiskSolidProcessor::new(schema_clone.clone())));
-        router.register(Box::new(RevolvedAreaSolidProcessor::new(
-            schema_clone.clone(),
+        router.register(Box::new(SweptDiskSolidProcessor::with_deflection(schema_clone.clone(), deflection)));
+        router.register(Box::new(RevolvedAreaSolidProcessor::with_deflection(
+            schema_clone.clone(), deflection,
         )));
         router.register(Box::new(AdvancedBrepProcessor::new()));
         router.register(Box::new(ShellBasedSurfaceModelProcessor::new()));
         router.register(Box::new(FaceBasedSurfaceModelProcessor::new()));
 
         router
+    }
+
+    /// Get the deflection tolerance (in model units)
+    pub fn deflection(&self) -> f64 {
+        self.deflection
     }
 
     /// Create router and extract unit scale from IFC file
@@ -158,6 +171,17 @@ impl GeometryRouter {
         router
     }
 
+    /// Create router with pre-calculated unit scale and deflection (in meters).
+    /// Deflection is converted to model units internally.
+    pub fn with_scale_deflection(unit_scale: f64, deflection: f64) -> Self {
+        // Convert deflection from meters to model units
+        // e.g., if unit_scale=0.001 (mm), deflection=0.001m -> 1.0mm in model units
+        let deflection_model = if unit_scale > 0.0 { deflection / unit_scale } else { deflection };
+        let mut router = Self::with_deflection(deflection_model);
+        router.unit_scale = unit_scale;
+        router
+    }
+
     /// Create router with RTC offset for large coordinate handling
     /// Use this for georeferenced models (e.g., Swiss UTM coordinates)
     pub fn with_rtc(rtc_offset: (f64, f64, f64)) -> Self {
@@ -169,6 +193,16 @@ impl GeometryRouter {
     /// Create router with both unit scale and RTC offset
     pub fn with_scale_and_rtc(unit_scale: f64, rtc_offset: (f64, f64, f64)) -> Self {
         let mut router = Self::new();
+        router.unit_scale = unit_scale;
+        router.rtc_offset = rtc_offset;
+        router
+    }
+
+    /// Create router with scale, RTC offset, and deflection (in meters).
+    /// Deflection is converted to model units internally.
+    pub fn with_scale_rtc_deflection(unit_scale: f64, rtc_offset: (f64, f64, f64), deflection: f64) -> Self {
+        let deflection_model = if unit_scale > 0.0 { deflection / unit_scale } else { deflection };
+        let mut router = Self::with_deflection(deflection_model);
         router.unit_scale = unit_scale;
         router.rtc_offset = rtc_offset;
         router

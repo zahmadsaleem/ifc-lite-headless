@@ -15,15 +15,45 @@ use std::f64::consts::PI;
 /// Prevents stack overflow from deeply nested CompositeCurve → TrimmedCurve → CompositeCurve chains.
 const MAX_CURVE_DEPTH: u32 = 50;
 
+/// Minimum segments for any circle approximation
+const MIN_CIRCLE_SEGMENTS: usize = 6;
+
+/// Maximum segments for any circle approximation
+const MAX_CIRCLE_SEGMENTS: usize = 64;
+
+/// Compute the number of segments needed to approximate a circle arc
+/// such that the maximum chord error (deflection) stays within tolerance.
+///
+/// Formula: segments = ceil(PI / acos(1 - deflection/radius))
+/// Clamped to [MIN_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS].
+pub fn segments_for_radius(radius: f64, deflection: f64) -> usize {
+    if deflection <= 0.0 || radius <= 0.0 {
+        return MIN_CIRCLE_SEGMENTS;
+    }
+    let ratio = deflection / radius;
+    if ratio >= 1.0 {
+        return MIN_CIRCLE_SEGMENTS;
+    }
+    let n = (PI / (1.0 - ratio).acos()).ceil() as usize;
+    n.clamp(MIN_CIRCLE_SEGMENTS, MAX_CIRCLE_SEGMENTS)
+}
+
 /// Profile processor - processes IFC profiles into 2D contours
 pub struct ProfileProcessor {
     schema: IfcSchema,
+    /// Deflection tolerance in model units
+    deflection: f64,
 }
 
 impl ProfileProcessor {
-    /// Create new profile processor
+    /// Create new profile processor with default deflection (0.001 model units)
     pub fn new(schema: IfcSchema) -> Self {
-        Self { schema }
+        Self { schema, deflection: 0.001 }
+    }
+
+    /// Create new profile processor with custom deflection tolerance
+    pub fn with_deflection(schema: IfcSchema, deflection: f64) -> Self {
+        Self { schema, deflection }
     }
 
     /// Process any IFC profile definition
@@ -210,8 +240,7 @@ impl ProfileProcessor {
             .get_float(3)
             .ok_or_else(|| Error::geometry("Circle missing Radius".to_string()))?;
 
-        // Generate circle with 36 segments for smooth appearance
-        let segments = 36;
+        let segments = segments_for_radius(radius, self.deflection);
         let mut points = Vec::with_capacity(segments);
 
         for i in 0..segments {
@@ -279,7 +308,7 @@ impl ProfileProcessor {
             .ok_or_else(|| Error::geometry("CircleHollow missing WallThickness".to_string()))?;
 
         let inner_radius = radius - wall_thickness;
-        let segments = 36;
+        let segments = segments_for_radius(radius, self.deflection);
 
         // Outer circle
         let mut outer_points = Vec::with_capacity(segments);
@@ -755,7 +784,7 @@ impl ProfileProcessor {
         };
 
         // Generate circle points in 3D
-        let segments = 24usize;
+        let segments = segments_for_radius(radius, self.deflection);
         let mut points = Vec::with_capacity(segments + 1);
 
         for i in 0..=segments {
@@ -1034,7 +1063,7 @@ impl ProfileProcessor {
         let radius = curve.get_float(1).unwrap_or(1.0);
         let (center, rotation) = self.get_placement_2d(curve, decoder)?;
 
-        let segments = 36;
+        let segments = segments_for_radius(radius, self.deflection);
         let mut points = Vec::with_capacity(segments);
 
         for i in 0..segments {
@@ -1061,7 +1090,7 @@ impl ProfileProcessor {
         let semi_axis2 = curve.get_float(2).unwrap_or(1.0);
         let (center, rotation) = self.get_placement_2d(curve, decoder)?;
 
-        let segments = 36;
+        let segments = segments_for_radius(semi_axis1.max(semi_axis2), self.deflection);
         let mut points = Vec::with_capacity(segments);
 
         for i in 0..segments {
@@ -1479,7 +1508,8 @@ mod tests {
         let profile_entity = decoder.decode_by_id(1).unwrap();
         let profile = processor.process(&profile_entity, &mut decoder).unwrap();
 
-        assert_eq!(profile.outer.len(), 36); // Circle with 36 segments
+        // Segment count is adaptive based on radius vs deflection
+        assert!(profile.outer.len() >= MIN_CIRCLE_SEGMENTS);
         assert!(!profile.outer.is_empty());
     }
 

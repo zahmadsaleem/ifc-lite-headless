@@ -108,7 +108,8 @@ pub fn process_ifc(content: &str, config: &ConvertConfig) -> Vec<GuidMesh> {
         }
     }
 
-    // Setup geometry router
+    // Setup geometry router (use deflection from config for curve tessellation)
+    let deflection = config.deflection;
     let router = GeometryRouter::with_units(content, &mut decoder);
     if !faceted_brep_ids.is_empty() {
         router.preprocess_faceted_breps(&faceted_brep_ids, &mut decoder);
@@ -145,9 +146,9 @@ pub fn process_ifc(content: &str, config: &ConvertConfig) -> Vec<GuidMesh> {
                 || rtc_offset.1.abs() > 1.0
                 || rtc_offset.2.abs() > 1.0
             {
-                GeometryRouter::with_scale_and_rtc(unit_scale, rtc_offset)
+                GeometryRouter::with_scale_rtc_deflection(unit_scale, rtc_offset, deflection)
             } else {
-                GeometryRouter::with_scale(unit_scale)
+                GeometryRouter::with_scale_deflection(unit_scale, deflection)
             };
 
             let mut mesh = local_router
