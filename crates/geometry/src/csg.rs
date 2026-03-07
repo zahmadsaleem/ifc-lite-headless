@@ -747,6 +747,43 @@ impl ClippingProcessor {
         }
     }
 
+    /// CSG subtract without artifact removal — for use in multi-opening sequences
+    /// where cleanup should happen once at the end, not after each step.
+    pub fn subtract_mesh_raw(&self, host_mesh: &Mesh, opening_mesh: &Mesh) -> Result<Mesh> {
+        use csgrs::traits::CSG;
+
+        if host_mesh.is_empty() { return Ok(Mesh::new()); }
+        if opening_mesh.is_empty() { return Ok(host_mesh.clone()); }
+        if !Self::bounds_overlap(host_mesh, opening_mesh) { return Ok(host_mesh.clone()); }
+
+        let host_csg = match Self::mesh_to_csgrs(host_mesh) {
+            Ok(csg) => csg, Err(_) => return Ok(host_mesh.clone()),
+        };
+        let opening_csg = match Self::mesh_to_csgrs(opening_mesh) {
+            Ok(csg) => csg, Err(_) => return Ok(host_mesh.clone()),
+        };
+
+        if host_csg.polygons.len() < 4 || opening_csg.polygons.len() < 4 {
+            return Ok(host_mesh.clone());
+        }
+        if host_csg.polygons.len() + opening_csg.polygons.len() > MAX_CSG_POLYGONS {
+            return Ok(host_mesh.clone());
+        }
+
+        let result_csg = host_csg.difference(&opening_csg);
+        if result_csg.polygons.is_empty() { return Ok(host_mesh.clone()); }
+
+        match Self::csgrs_to_mesh(&result_csg) {
+            Ok(result) => Ok(result),
+            Err(_) => Ok(host_mesh.clone())
+        }
+    }
+
+    /// Run artifact removal as a standalone post-process step.
+    pub fn clean_artifacts(&self, mesh: &Mesh, host_mesh: &Mesh) -> Mesh {
+        Self::remove_csg_artifacts(mesh, host_mesh)
+    }
+
     /// Remove CSG spike artifacts — degenerate triangles with extreme aspect ratios.
     ///
     /// CSG can produce long thin "spike" triangles at intersection boundaries.
