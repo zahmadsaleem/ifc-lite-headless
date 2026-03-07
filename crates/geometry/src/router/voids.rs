@@ -54,39 +54,42 @@ impl GeometryRouter {
 
         let clipper = ClippingProcessor::new();
 
-        // Process each opening and CSG subtract
+        // Save original host for final artifact cleanup bounds
+        let original_host = result.clone();
+
+        // Process each opening with raw CSG (no per-step artifact removal).
+        // Artifact removal between steps can discard valid wall sections that
+        // become temporarily disconnected during sequential subtracts.
         for &opening_id in opening_ids.iter() {
             let opening_entity = match decoder.decode_by_id(opening_id) {
                 Ok(e) => e,
                 Err(_) => continue,
             };
 
-            // Get individual opening item meshes to avoid non-manifold issues
             let opening_meshes = self.get_opening_item_meshes(&opening_entity, decoder);
 
             for opening_mesh in opening_meshes {
-                // Validate opening mesh
                 if !opening_mesh.positions.iter().all(|&v| v.is_finite())
                     || opening_mesh.positions.len() < 9
                 {
                     continue;
                 }
 
-                // CSG subtract opening from host
-                match clipper.subtract_mesh(&result, &opening_mesh) {
+                match clipper.subtract_mesh_raw(&result, &opening_mesh) {
                     Ok(csg_result)
                         if !csg_result.is_empty() && csg_result.triangle_count() >= 4 =>
                     {
                         result = csg_result;
                     }
-                    _ => {
-                        // CSG failed or produced degenerate result — keep previous
-                    }
+                    _ => {}
                 }
             }
         }
 
-        Ok(result)
+        // Single artifact cleanup pass using original host bounds.
+        // This avoids the problem of per-step cleanup discarding valid
+        // wall sections that are temporarily disconnected mid-sequence.
+        Ok(clipper.clean_artifacts(&result, &original_host))
     }
 
     /// Get individual representation item meshes for an opening element.
