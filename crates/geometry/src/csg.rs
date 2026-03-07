@@ -834,7 +834,8 @@ impl ClippingProcessor {
         // Remove disconnected small fragments via connected-component analysis.
         // CSG can produce small floating pieces (caps, slivers) disconnected from
         // the main body. Keep only the largest connected component.
-        Self::remove_small_components(&cleaned)
+        let deduped = Self::remove_small_components(&cleaned);
+        Self::weld_vertices(&deduped)
     }
 
     /// Find connected components by shared vertices and keep the largest.
@@ -941,6 +942,198 @@ impl ClippingProcessor {
             }
             result.add_triangle(base_out, base_out + 1, base_out + 2);
         }
+
+        result
+    }
+
+    /// Weld coincident vertices and recompute smooth normals.
+    ///
+    /// CSG output has 3 unique vertices per triangle (unshared), causing visible
+    /// shading seams on flat surfaces. This pass:
+    /// 1. Merges vertices at the same position
+    /// 2. Groups adjacent faces into smooth groups by normal angle threshold
+    /// 3. Splits vertices at sharp edges so each smooth group gets its own vertex
+    /// 4. Computes area-weighted smooth normals per group
+    fn weld_vertices(mesh: &Mesh) -> Mesh {
+        let tri_count = mesh.triangle_count();
+        if tri_count == 0 {
+            return mesh.clone();
+        }
+
+        // Tight epsilon: only merge truly coincident CSG duplicate vertices.
+        // Too large risks merging across thin wall features at opening corners.
+        let eps = 0.001_f32;
+        let inv_eps = 1.0 / eps;
+        let eps_sq = eps * eps;
+        // 60° threshold: CSG float drift can produce >35° variation on flat
+        // surfaces. Real sharp edges (wall corners, openings) are ~90°.
+        let sharp_cos = (60.0_f32).to_radians().cos(); // 0.5
+
+        // Phase 1: Deduplicate vertices by spatial grid with neighbor search.
+        // Each cell stores a list of vertex indices to handle boundary cases
+        // where nearby vertices land in adjacent cells.
+        use rustc_hash::FxHashMap;
+        let vert_count = mesh.vertex_count();
+        let mut cell_verts: FxHashMap<(i64, i64, i64), Vec<u32>> = FxHashMap::default();
+        let mut welded_pos: Vec<f32> = Vec::with_capacity(vert_count * 3);
+        let mut old_to_new: Vec<u32> = Vec::with_capacity(vert_count);
+
+        for vi in 0..vert_count {
+            let px = mesh.positions[vi * 3];
+            let py = mesh.positions[vi * 3 + 1];
+            let pz = mesh.positions[vi * 3 + 2];
+            let qx = (px * inv_eps).floor() as i64;
+            let qy = (py * inv_eps).floor() as i64;
+            let qz = (pz * inv_eps).floor() as i64;
+
+            // Search 3x3x3 neighborhood for any existing vertex within epsilon
+            let mut found = None;
+            'search: for dx in -1i64..=1 {
+                for dy in -1i64..=1 {
+                    for dz in -1i64..=1 {
+                        if let Some(indices) = cell_verts.get(&(qx + dx, qy + dy, qz + dz)) {
+                            for &idx in indices {
+                                let i = idx as usize;
+                                let d2 = (px - welded_pos[i * 3]).powi(2)
+                                    + (py - welded_pos[i * 3 + 1]).powi(2)
+                                    + (pz - welded_pos[i * 3 + 2]).powi(2);
+                                if d2 <= eps_sq {
+                                    found = Some(idx);
+                                    break 'search;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let new_idx = match found {
+                Some(idx) => idx,
+                None => {
+                    let idx = (welded_pos.len() / 3) as u32;
+                    cell_verts.entry((qx, qy, qz)).or_default().push(idx);
+                    welded_pos.push(px);
+                    welded_pos.push(py);
+                    welded_pos.push(pz);
+                    idx
+                }
+            };
+            old_to_new.push(new_idx);
+        }
+
+        // Remap indices to welded vertex space
+        let new_indices: Vec<u32> = mesh.indices.iter().map(|&i| old_to_new[i as usize]).collect();
+
+        // Phase 2: Compute face normals (unnormalized cross product = area-weighted).
+        let mut face_normals: Vec<[f32; 3]> = Vec::with_capacity(tri_count);
+        let mut face_normals_unit: Vec<[f32; 3]> = Vec::with_capacity(tri_count);
+        for ti in 0..tri_count {
+            let i0 = new_indices[ti * 3] as usize;
+            let i1 = new_indices[ti * 3 + 1] as usize;
+            let i2 = new_indices[ti * 3 + 2] as usize;
+            let (ax, ay, az) = (welded_pos[i0 * 3], welded_pos[i0 * 3 + 1], welded_pos[i0 * 3 + 2]);
+            let (bx, by, bz) = (welded_pos[i1 * 3], welded_pos[i1 * 3 + 1], welded_pos[i1 * 3 + 2]);
+            let (cx, cy, cz) = (welded_pos[i2 * 3], welded_pos[i2 * 3 + 1], welded_pos[i2 * 3 + 2]);
+            let (e1x, e1y, e1z) = (bx - ax, by - ay, bz - az);
+            let (e2x, e2y, e2z) = (cx - ax, cy - ay, cz - az);
+            let n = [
+                e1y * e2z - e1z * e2y,
+                e1z * e2x - e1x * e2z,
+                e1x * e2y - e1y * e2x,
+            ];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            face_normals.push(n);
+            if len > 1e-12 {
+                face_normals_unit.push([n[0] / len, n[1] / len, n[2] / len]);
+            } else {
+                face_normals_unit.push([0.0, 1.0, 0.0]);
+            }
+        }
+
+        // Phase 3: Build vertex -> corner adjacency.
+        // A "corner" is a specific index slot (tri_idx * 3 + k).
+        let welded_vert_count = welded_pos.len() / 3;
+        let mut vert_corners: Vec<Vec<usize>> = vec![Vec::new(); welded_vert_count];
+        for ti in 0..tri_count {
+            for k in 0..3 {
+                let corner = ti * 3 + k;
+                vert_corners[new_indices[corner] as usize].push(corner);
+            }
+        }
+
+        // Phase 4: For each vertex, split corners into smooth groups by normal angle.
+        // Each group becomes a separate output vertex with averaged normal.
+        let mut corner_to_out: Vec<u32> = vec![0; tri_count * 3];
+        let mut out_pos: Vec<f32> = Vec::with_capacity(welded_vert_count * 3);
+        let mut out_normals: Vec<f32> = Vec::with_capacity(welded_vert_count * 3);
+
+        for vi in 0..welded_vert_count {
+            let corners = &vert_corners[vi];
+            if corners.is_empty() { continue; }
+
+            let mut grouped = vec![false; corners.len()];
+            for seed_i in 0..corners.len() {
+                if grouped[seed_i] { continue; }
+                grouped[seed_i] = true;
+
+                let fn0 = &face_normals[corners[seed_i] / 3];
+                let mut acc = [fn0[0], fn0[1], fn0[2]];
+                let mut group_corners = vec![corners[seed_i]];
+
+                // Flood-fill: keep re-scanning ungrouped corners against the
+                // running group normal. This handles transitive coplanarity
+                // where A~B and B~C but A≁C due to slight CSG float drift.
+                let mut changed = true;
+                while changed {
+                    changed = false;
+                    let glen = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
+                    if glen < 1e-12 { break; }
+                    let gn = [acc[0] / glen, acc[1] / glen, acc[2] / glen];
+                    for other_i in 0..corners.len() {
+                        if grouped[other_i] { continue; }
+                        let on = &face_normals_unit[corners[other_i] / 3];
+                        let dot = gn[0] * on[0] + gn[1] * on[1] + gn[2] * on[2];
+                        if dot >= sharp_cos {
+                            grouped[other_i] = true;
+                            let fn_ = &face_normals[corners[other_i] / 3];
+                            acc[0] += fn_[0]; acc[1] += fn_[1]; acc[2] += fn_[2];
+                            group_corners.push(corners[other_i]);
+                            changed = true;
+                        }
+                    }
+                }
+
+                let len = (acc[0] * acc[0] + acc[1] * acc[1] + acc[2] * acc[2]).sqrt();
+                let norm = if len > 1e-12 {
+                    [acc[0] / len, acc[1] / len, acc[2] / len]
+                } else {
+                    face_normals_unit[corners[seed_i] / 3]
+                };
+
+                let out_idx = (out_pos.len() / 3) as u32;
+                out_pos.push(welded_pos[vi * 3]);
+                out_pos.push(welded_pos[vi * 3 + 1]);
+                out_pos.push(welded_pos[vi * 3 + 2]);
+                out_normals.push(norm[0]);
+                out_normals.push(norm[1]);
+                out_normals.push(norm[2]);
+
+                for &corner in &group_corners {
+                    corner_to_out[corner] = out_idx;
+                }
+            }
+        }
+
+        // Phase 5: Build output mesh
+        let out_vert_count = out_pos.len() / 3;
+        let mut result = Mesh::with_capacity(out_vert_count, new_indices.len());
+        for vi in 0..out_vert_count {
+            result.add_vertex(
+                Point3::new(out_pos[vi * 3] as f64, out_pos[vi * 3 + 1] as f64, out_pos[vi * 3 + 2] as f64),
+                Vector3::new(out_normals[vi * 3] as f64, out_normals[vi * 3 + 1] as f64, out_normals[vi * 3 + 2] as f64),
+            );
+        }
+        result.indices = corner_to_out;
 
         result
     }

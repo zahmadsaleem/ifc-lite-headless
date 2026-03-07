@@ -483,6 +483,57 @@
       return { solid, faded };
     };
 
+    // Isolate + zoom facing the object's front face.
+    // Samples mesh face normals to find dominant face direction, then
+    // positions camera opposite that normal for a head-on close-up view.
+    V.focusOn = (nameFilter) => {
+      V.isolate(nameFilter);
+      const box = new THREE.Box3();
+      // Bucket face normals by direction — front/back cancel if summed,
+      // so track positive and negative contributions per axis separately.
+      const buckets = new Float64Array(6); // +x,-x,+y,-y,+z,-z area
+      scene.traverse(obj => {
+        if (!obj.isMesh || !obj.visible) return;
+        box.expandByObject(obj);
+        const geo = obj.geometry;
+        const pos = geo.attributes.position;
+        const idx = geo.index;
+        const cnt = idx ? idx.count : pos.count;
+        const wm = new THREE.Matrix3().getNormalMatrix(obj.matrixWorld);
+        const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+        const fn = new THREE.Vector3();
+        for (let i = 0; i < cnt; i += 3) {
+          const i0 = idx ? idx.getX(i) : i, i1 = idx ? idx.getX(i+1) : i+1, i2 = idx ? idx.getX(i+2) : i+2;
+          a.fromBufferAttribute(pos, i0); b.fromBufferAttribute(pos, i1); c.fromBufferAttribute(pos, i2);
+          fn.crossVectors(b.clone().sub(a), c.clone().sub(a)).applyMatrix3(wm);
+          const area = fn.length();
+          if (area < 1e-8) continue;
+          fn.normalize();
+          // Accumulate into the dominant axis bucket
+          const ax = Math.abs(fn.x), ay = Math.abs(fn.y), az = Math.abs(fn.z);
+          if (ax >= ay && ax >= az) buckets[fn.x > 0 ? 0 : 1] += area;
+          else if (ay >= az) buckets[fn.y > 0 ? 2 : 3] += area;
+          else buckets[fn.z > 0 ? 4 : 5] += area;
+        }
+      });
+      if (box.isEmpty()) return { error: 'No matching meshes' };
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      // Pick the bucket with most area — that's the dominant face direction
+      let best = 0;
+      for (let i = 1; i < 6; i++) if (buckets[i] > buckets[best]) best = i;
+      const dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+      const d = dirs[best];
+      const faceDir = new THREE.Vector3(d[0], d[1], d[2]);
+      const dist = maxDim * 1.0;
+      controls.target.copy(center);
+      camera.position.copy(center).addScaledVector(faceDir, dist);
+      camera.up.set(0, 0, 1);
+      controls.update();
+      return { center: [+center.x.toFixed(2), +center.y.toFixed(2), +center.z.toFixed(2)], size: [+size.x.toFixed(2), +size.y.toFixed(2), +size.z.toFixed(2)], faceDir: [d[0], d[1], d[2]] };
+    };
+
     // Zoom to a specific node and isolate + xray it
     V.inspect = (nameFilter) => {
       V.showAll();
@@ -498,6 +549,7 @@
       'V.find(query)': 'Search nodes by name substring',
       'V.stats()': 'Scene stats (meshes, triangles, vertices)',
       'V.zoomToFit(filter?)': 'Zoom camera to fit all or filtered meshes',
+      'V.focusOn(filter)': 'Isolate + zoom facing largest face (for close inspection)',
       'V.isolate(filter)': 'Show only matching meshes',
       'V.showAll()': 'Show all meshes',
       'V.hide(filter)': 'Hide matching meshes',
