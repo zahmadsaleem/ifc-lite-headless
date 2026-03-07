@@ -6,7 +6,7 @@
 
 use crate::config::{ConvertConfig, ElementNaming};
 use ifc_lite_core::{build_entity_index, EntityDecoder, EntityScanner, IfcType};
-use ifc_lite_geometry::{calculate_normals, GeometryRouter, Mesh};
+use ifc_lite_geometry::{calculate_normals, GeometryRouter, Mesh, VoidIndex};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -68,7 +68,7 @@ pub fn process_ifc(content: &str, config: &ConvertConfig) -> Vec<GuidMesh> {
     // Scan entities
     let mut scanner = EntityScanner::new(content);
     let mut faceted_brep_ids: Vec<u32> = Vec::new();
-    let mut void_index: FxHashMap<u32, Vec<u32>> = FxHashMap::default();
+    let mut void_index = VoidIndex::new();
     let mut entity_jobs: Vec<EntityJob> = Vec::with_capacity(2000);
 
     while let Some((id, type_name, start, end)) = scanner.next_entity() {
@@ -77,7 +77,7 @@ pub fn process_ifc(content: &str, config: &ConvertConfig) -> Vec<GuidMesh> {
         } else if type_name == "IFCRELVOIDSELEMENT" {
             if let Ok(entity) = decoder.decode_at(start, end) {
                 if let (Some(host), Some(opening)) = (entity.get_ref(4), entity.get_ref(5)) {
-                    void_index.entry(host).or_default().push(opening);
+                    void_index.add_relationship(host, opening);
                 }
             }
         }
@@ -152,7 +152,7 @@ pub fn process_ifc(content: &str, config: &ConvertConfig) -> Vec<GuidMesh> {
             };
 
             let mut mesh = local_router
-                .process_element_with_voids(&entity, &mut local_decoder, void_index_arc.as_ref())
+                .process_element_with_voids_2d(&entity, &mut local_decoder, void_index_arc.as_ref())
                 .ok()?;
 
             if mesh.is_empty() {

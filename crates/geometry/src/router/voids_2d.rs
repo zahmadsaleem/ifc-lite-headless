@@ -259,22 +259,23 @@ impl GeometryRouter {
         let nonplanar_voids = extract_nonplanar_voids(classifications);
 
         // Process coplanar voids at 2D level
-        let profile_with_voids = if !coplanar_voids.is_empty() {
-            // Collect through-void contours for 2D subtraction
-            let through_contours: Vec<Vec<Point2<f64>>> = coplanar_voids
-                .iter()
-                .filter(|v| v.is_through)
-                .map(|v| v.contour.clone())
-                .collect();
+        let through_contours: Vec<Vec<Point2<f64>>> = coplanar_voids
+            .iter()
+            .filter(|v| v.is_through)
+            .map(|v| v.contour.clone())
+            .collect();
 
-            // Subtract voids from profile
-            let modified_profile = if !through_contours.is_empty() {
-                match subtract_multiple_2d(&base_profile, &through_contours) {
-                    Ok(p) => p,
-                    Err(_) => base_profile.clone(),
-                }
-            } else {
-                base_profile.clone()
+        // If no through contours and no non-planar voids, the 2D path can't help —
+        // fall back to 3D CSG which handles arbitrary void/host configurations.
+        if through_contours.is_empty() && nonplanar_voids.is_empty() {
+            return Ok(None);
+        }
+
+        let profile_with_voids = if !through_contours.is_empty() {
+            // Subtract through-voids from profile
+            let modified_profile = match subtract_multiple_2d(&base_profile, &through_contours) {
+                Ok(p) => p,
+                Err(_) => base_profile.clone(),
             };
 
             // Create profile with partial-depth voids

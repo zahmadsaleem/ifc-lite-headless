@@ -18,3 +18,4 @@ Cargo.lock
 .claude/settings.local.json
 bench/__pycache__/
 viewer/node_modules
+.task/

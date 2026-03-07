@@ -53,10 +53,14 @@
 </head>
 <body>
   <div id="controls">
-    <h3>IFC-Lite Tileset Viewer</h3>
-    <div id="zoneTree">Loading...</div>
-    <div id="stats"></div>
-    <div id="error"></div>
+    <div id="nav-toggle" style="cursor:pointer;user-select:none;font-size:14px;font-weight:bold;">
+      IFC-Lite Tileset Viewer <span id="nav-arrow">▶</span>
+    </div>
+    <div id="nav-content" style="display:none;">
+      <div id="zoneTree">Loading...</div>
+      <div id="stats"></div>
+      <div id="error"></div>
+    </div>
   </div>
 
   <script type="module">
@@ -107,6 +111,15 @@
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Nav toggle (collapsed by default)
+    document.getElementById('nav-toggle').addEventListener('click', () => {
+      const content = document.getElementById('nav-content');
+      const arrow = document.getElementById('nav-arrow');
+      const open = content.style.display !== 'none';
+      content.style.display = open ? 'none' : 'block';
+      arrow.textContent = open ? '▶' : '▼';
     });
 
     // --- URL params for filtering ---
@@ -274,6 +287,232 @@
     animate();
 
     loadTileset();
+
+    // --- Global Viewer API (window.V) ---
+    // Usable from browser console or automation tools.
+    // All methods return JSON-serializable results.
+    const V = {};
+
+    // Scene references (populated after load)
+    V._scene = scene;
+    V._camera = camera;
+    V._controls = controls;
+    V._renderer = renderer;
+
+    // List all mesh node names in the scene
+    V.nodes = () => {
+      const names = [];
+      scene.traverse(obj => {
+        if (obj.isMesh) names.push(obj.name || `(unnamed:${obj.id})`);
+      });
+      return names;
+    };
+
+    // Search nodes by substring (case-insensitive)
+    V.find = (query) => {
+      const q = query.toLowerCase();
+      const results = [];
+      scene.traverse(obj => {
+        if (obj.isMesh && obj.name && obj.name.toLowerCase().includes(q)) {
+          results.push(obj.name);
+        }
+      });
+      return results;
+    };
+
+    // Get scene stats
+    V.stats = () => {
+      let meshes = 0, tris = 0, verts = 0;
+      scene.traverse(obj => {
+        if (obj.isMesh) {
+          meshes++;
+          const geo = obj.geometry;
+          if (geo.index) tris += geo.index.count / 3;
+          else if (geo.attributes.position) tris += geo.attributes.position.count / 3;
+          if (geo.attributes.position) verts += geo.attributes.position.count;
+        }
+      });
+      return { meshes, triangles: Math.round(tris), vertices: verts };
+    };
+
+    // Zoom to fit everything (or a filtered set)
+    V.zoomToFit = (nameFilter) => {
+      const box = new THREE.Box3();
+      let count = 0;
+      scene.traverse(obj => {
+        if (!obj.isMesh) return;
+        if (nameFilter && !(obj.name || '').toLowerCase().includes(nameFilter.toLowerCase())) return;
+        box.expandByObject(obj);
+        count++;
+      });
+      if (box.isEmpty()) return { error: 'No matching meshes', filter: nameFilter };
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      controls.target.copy(center);
+      camera.position.set(center.x + maxDim * 0.8, center.y - maxDim * 0.8, center.z + maxDim * 0.5);
+      controls.update();
+      return { matched: count, center: [+center.x.toFixed(2), +center.y.toFixed(2), +center.z.toFixed(2)], size: [+size.x.toFixed(2), +size.y.toFixed(2), +size.z.toFixed(2)] };
+    };
+
+    // Show only meshes matching filter, hide the rest
+    V.isolate = (nameFilter) => {
+      const q = nameFilter.toLowerCase();
+      let shown = 0, hidden = 0;
+      scene.traverse(obj => {
+        if (!obj.isMesh) return;
+        const match = (obj.name || '').toLowerCase().includes(q);
+        obj.visible = match;
+        if (match) shown++; else hidden++;
+      });
+      return { shown, hidden };
+    };
+
+    // Show all meshes
+    V.showAll = () => {
+      let count = 0;
+      scene.traverse(obj => { if (obj.isMesh) { obj.visible = true; count++; } });
+      return { shown: count };
+    };
+
+    // Hide meshes matching filter
+    V.hide = (nameFilter) => {
+      const q = nameFilter.toLowerCase();
+      let hidden = 0;
+      scene.traverse(obj => {
+        if (obj.isMesh && (obj.name || '').toLowerCase().includes(q)) {
+          obj.visible = false;
+          hidden++;
+        }
+      });
+      return { hidden };
+    };
+
+    // Get bounding box of a specific node (by exact name or substring)
+    V.bounds = (nameFilter) => {
+      const q = nameFilter.toLowerCase();
+      const box = new THREE.Box3();
+      let count = 0;
+      scene.traverse(obj => {
+        if (obj.isMesh && (obj.name || '').toLowerCase().includes(q)) {
+          box.expandByObject(obj);
+          count++;
+        }
+      });
+      if (box.isEmpty()) return { error: 'Not found', filter: nameFilter };
+      const min = box.min, max = box.max;
+      return {
+        matched: count,
+        min: [+min.x.toFixed(3), +min.y.toFixed(3), +min.z.toFixed(3)],
+        max: [+max.x.toFixed(3), +max.y.toFixed(3), +max.z.toFixed(3)],
+      };
+    };
+
+    // Set camera position and target directly
+    V.setCamera = (pos, target) => {
+      if (pos) camera.position.set(pos[0], pos[1], pos[2]);
+      if (target) controls.target.set(target[0], target[1], target[2]);
+      controls.update();
+      return { position: camera.position.toArray().map(v => +v.toFixed(2)), target: controls.target.toArray().map(v => +v.toFixed(2)) };
+    };
+
+    // Get current camera state
+    V.getCamera = () => ({
+      position: camera.position.toArray().map(v => +v.toFixed(2)),
+      target: controls.target.toArray().map(v => +v.toFixed(2)),
+    });
+
+    // Highlight a node by coloring it (keeps original color to restore later)
+    V.highlight = (nameFilter, color = 0xff0000) => {
+      const q = nameFilter.toLowerCase();
+      let count = 0;
+      scene.traverse(obj => {
+        if (!obj.isMesh) return;
+        if (!(obj.name || '').toLowerCase().includes(q)) return;
+        if (!obj.userData._origMaterial) obj.userData._origMaterial = obj.material;
+        obj.material = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
+        count++;
+      });
+      return { highlighted: count };
+    };
+
+    // Restore original materials
+    V.unhighlight = (nameFilter) => {
+      const q = nameFilter ? nameFilter.toLowerCase() : null;
+      let count = 0;
+      scene.traverse(obj => {
+        if (!obj.isMesh || !obj.userData._origMaterial) return;
+        if (q && !(obj.name || '').toLowerCase().includes(q)) return;
+        obj.material = obj.userData._origMaterial;
+        delete obj.userData._origMaterial;
+        count++;
+      });
+      return { restored: count };
+    };
+
+    // Set wireframe mode
+    V.wireframe = (on = true, nameFilter) => {
+      let count = 0;
+      scene.traverse(obj => {
+        if (!obj.isMesh) return;
+        if (nameFilter && !(obj.name || '').toLowerCase().includes(nameFilter.toLowerCase())) return;
+        obj.material.wireframe = on;
+        count++;
+      });
+      return { affected: count, wireframe: on };
+    };
+
+    // X-ray mode (make everything semi-transparent except matching)
+    V.xray = (nameFilter, opacity = 0.1) => {
+      const q = nameFilter.toLowerCase();
+      let solid = 0, faded = 0;
+      scene.traverse(obj => {
+        if (!obj.isMesh) return;
+        const match = (obj.name || '').toLowerCase().includes(q);
+        if (!obj.userData._origMaterial) obj.userData._origMaterial = obj.material;
+        if (match) {
+          obj.material = obj.userData._origMaterial;
+          solid++;
+        } else {
+          obj.material = new THREE.MeshStandardMaterial({
+            color: 0x888888, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
+          });
+          faded++;
+        }
+      });
+      return { solid, faded };
+    };
+
+    // Zoom to a specific node and isolate + xray it
+    V.inspect = (nameFilter) => {
+      V.showAll();
+      V.unhighlight();
+      const xr = V.xray(nameFilter, 0.05);
+      const zoom = V.zoomToFit(nameFilter);
+      return { ...xr, ...zoom };
+    };
+
+    // Help - list all commands
+    V.help = () => ({
+      'V.nodes()': 'List all mesh node names',
+      'V.find(query)': 'Search nodes by name substring',
+      'V.stats()': 'Scene stats (meshes, triangles, vertices)',
+      'V.zoomToFit(filter?)': 'Zoom camera to fit all or filtered meshes',
+      'V.isolate(filter)': 'Show only matching meshes',
+      'V.showAll()': 'Show all meshes',
+      'V.hide(filter)': 'Hide matching meshes',
+      'V.bounds(filter)': 'Get bounding box of matching meshes',
+      'V.setCamera([x,y,z], [tx,ty,tz])': 'Set camera position and target',
+      'V.getCamera()': 'Get current camera state',
+      'V.highlight(filter, color?)': 'Color matching meshes (default red)',
+      'V.unhighlight(filter?)': 'Restore original materials',
+      'V.wireframe(on?, filter?)': 'Toggle wireframe mode',
+      'V.xray(filter, opacity?)': 'X-ray: fade everything except match',
+      'V.inspect(filter)': 'X-ray + zoom to fit a specific node',
+    });
+
+    window.V = V;
+    console.log('[Viewer API] window.V ready. Type V.help() for commands.');
   </script>
 </body>
 </html>

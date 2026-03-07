@@ -22,17 +22,8 @@ pub fn extrude_profile(
         ));
     }
 
-    // Check if profile has extreme aspect ratio (very elongated)
-    // This detects profiles like railings that span building perimeters
-    // and would create stretched triangles when triangulated
-    let should_skip_caps = profile_has_extreme_aspect_ratio(&profile.outer);
-
-    // Triangulate profile (only if we need caps)
-    let triangulation = if should_skip_caps {
-        None
-    } else {
-        Some(profile.triangulate()?)
-    };
+    // Always triangulate for caps (matching web-ifc behavior)
+    let triangulation = Some(profile.triangulate()?);
 
     // Create mesh
     let cap_vertex_count = triangulation.as_ref().map(|t| t.points.len() * 2).unwrap_or(0);
@@ -72,44 +63,6 @@ pub fn extrude_profile(
     Ok(mesh)
 }
 
-/// Check if a profile has an extreme aspect ratio (very elongated shape)
-/// Returns true if the profile's aspect ratio exceeds 100:1
-/// This catches profiles like railings that span building perimeters but have
-/// small cross-sections, which would create problematic cap triangles.
-#[inline]
-fn profile_has_extreme_aspect_ratio(outer: &[Point2<f64>]) -> bool {
-    if outer.len() < 3 {
-        return false;
-    }
-
-    // Calculate bounding box
-    let mut min_x = f64::MAX;
-    let mut max_x = f64::MIN;
-    let mut min_y = f64::MAX;
-    let mut max_y = f64::MIN;
-
-    for p in outer {
-        min_x = min_x.min(p.x);
-        max_x = max_x.max(p.x);
-        min_y = min_y.min(p.y);
-        max_y = max_y.max(p.y);
-    }
-
-    let width = max_x - min_x;
-    let height = max_y - min_y;
-
-    // Skip if dimensions are too small to measure
-    if width < 0.001 || height < 0.001 {
-        return false;
-    }
-
-    let aspect_ratio = (width / height).max(height / width);
-
-    // Skip caps if aspect ratio > 100:1
-    // This is a very conservative check that only catches truly extreme profiles
-    // The stretched triangle filter will catch any remaining issues
-    aspect_ratio > 100.0
-}
 
 /// Extrude a 2D profile with void awareness
 ///
