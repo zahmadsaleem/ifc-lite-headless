@@ -433,8 +433,8 @@ fn main() {
 }
 
 fn run_glb(input: &PathBuf, output: &PathBuf, config: &ConvertConfig) {
-    let content = match std::fs::read_to_string(input) {
-        Ok(c) => c,
+    let content = match std::fs::read(input) {
+        Ok(raw) => String::from_utf8_lossy(&raw).into_owned(),
         Err(e) => {
             eprintln!("Error reading {}: {}", input.display(), e);
             std::process::exit(1);

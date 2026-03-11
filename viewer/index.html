@@ -13,7 +13,7 @@
       background: rgba(0,0,0,0.87); color: #fff;
       border-radius: 6px; font-family: monospace; font-size: 13px;
       max-height: 90vh; overflow-y: auto;
-      min-width: 240px; max-width: 280px;
+      min-width: 240px; max-width: 300px;
     }
     #panel-header {
       padding: 10px 14px; cursor: pointer; user-select: none;
@@ -36,6 +36,18 @@
     }
     .fsec-hdr:hover { color: #aab; }
     .fsec-body { padding: 0 0 2px 2px; }
+    .fsec-actions {
+      display: flex; gap: 4px; margin-bottom: 3px; flex-wrap: wrap;
+    }
+    .fsec-actions button, .btn {
+      background: none; border: 1px solid #444; color: #889; font-size: 10px;
+      font-family: monospace; padding: 1px 5px; border-radius: 3px; cursor: pointer;
+    }
+    .fsec-actions button:hover, .btn:hover { color: #4fc3f7; border-color: #4fc3f7; }
+    .btn-primary {
+      background: #1a3a5c; border-color: #4fc3f7; color: #4fc3f7;
+    }
+    .btn-primary:hover { background: #2a5a8c; }
 
     .fi {
       display: flex; align-items: center; gap: 5px;
@@ -45,6 +57,9 @@
     .fi input[type=checkbox] { cursor: pointer; accent-color: #4fc3f7; flex-shrink: 0; }
     .fi-lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .fi-cnt { color: #555; font-size: 10px; flex-shrink: 0; }
+    .fi-status { font-size: 9px; flex-shrink: 0; margin-left: 2px; }
+    .fi-status.loaded { color: #4caf50; }
+    .fi-status.pending { color: #666; }
     .zt-children { padding-left: 14px; }
 
     #stats {
@@ -52,6 +67,12 @@
       color: #778; font-size: 11px; line-height: 1.6;
     }
     .ph { color: #445; font-size: 11px; }
+
+    #load-bar {
+      display: flex; align-items: center; gap: 4px; margin-top: 4px; margin-bottom: 2px;
+    }
+    #load-bar label { font-size: 10px; color: #667; cursor: pointer; user-select: none; }
+    #load-bar input[type=checkbox] { accent-color: #4fc3f7; cursor: pointer; }
   </style>
   <script type="importmap">
     {
@@ -75,7 +96,7 @@
         <div class="fsec-hdr" data-target="fl-models">
           <span>Models</span><span class="fsa">▼</span>
         </div>
-        <div id="fl-models" class="fsec-body"><span class="ph">—</span></div>
+        <div id="fl-models" class="fsec-body"><span class="ph">Loading tileset…</span></div>
       </div>
 
       <div class="fsec">
@@ -100,7 +121,7 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
     import { TilesRenderer } from '3d-tiles-renderer';
-    import { UnloadTilesPlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/plugins';
+    import { UpdateOnChangePlugin } from '3d-tiles-renderer/plugins';
 
     // --- Three.js setup ---
     const scene = new THREE.Scene();
@@ -137,7 +158,9 @@
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
-      if (tilesRenderer) tilesRenderer.setResolutionFromRenderer(camera, renderer);
+      for (const r of Object.values(modelRenderers)) {
+        r.setResolutionFromRenderer(camera, renderer);
+      }
     });
 
     // --- Panel toggle ---
@@ -151,7 +174,7 @@
 
     // --- Filter section collapse/expand ---
     document.querySelectorAll('.fsec-hdr').forEach(hdr => {
-      hdr.addEventListener('click', () => {
+      hdr.addEventListener('click', (e) => {
         const body = document.getElementById(hdr.dataset.target);
         const arrow = hdr.querySelector('.fsa');
         const open = body.style.display !== 'none';
@@ -160,29 +183,161 @@
       });
     });
 
-    // --- Orbit pivot: set pivot at mouse hit point ---
+    // --- Orbit pivot: drag orbits around the geometry under the cursor ---
+    // Custom orbit bypasses OrbitControls to avoid the lookAt jump.
     const raycaster = new THREE.Raycaster();
-    renderer.domElement.addEventListener('mousedown', (e) => {
-      if (e.button !== 0 || !tilesRenderer) return;
+
+    // Pivot indicator ball
+    const pivotBall = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0x4fc3f7, transparent: true, opacity: 0.7, depthTest: false })
+    );
+    pivotBall.renderOrder = 999;
+    pivotBall.visible = false;
+    scene.add(pivotBall);
+
+    let _orbitPivot = null;   // world-space hit point
+    let _orbitActive = false;
+    let _lastMouse = null;
+
+    renderer.domElement.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      _orbitPivot = null;
+      _orbitActive = false;
+      _lastMouse = { x: e.clientX, y: e.clientY };
+
+      const groups = Object.values(modelRenderers).map(r => r.group);
+      if (groups.length === 0) return;
       const rect = renderer.domElement.getBoundingClientRect();
       const ndc = new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -((e.clientY - rect.top) / rect.height) * 2 + 1,
       );
       raycaster.setFromCamera(ndc, camera);
-      const hits = raycaster.intersectObjects([tilesRenderer.group], true);
+      const hits = raycaster.intersectObjects(groups, true)
+        .filter(h => h.object.visible);
       if (hits.length > 0) {
-        controls.target.copy(hits[0].point);
-        controls.update();
+        _orbitPivot = hits[0].point.clone();
       }
     });
 
-    // --- URL params & tileset selector ---
+    renderer.domElement.addEventListener('pointermove', (e) => {
+      if (!_orbitPivot || !_lastMouse) return;
+      const dx = e.clientX - _lastMouse.x;
+      const dy = e.clientY - _lastMouse.y;
+
+      if (!_orbitActive) {
+        if (dx * dx + dy * dy < 4) return; // wait for real drag
+        _orbitActive = true;
+        // Disable OrbitControls — we handle rotation manually
+        controls.enabled = false;
+
+        pivotBall.position.copy(_orbitPivot);
+        const dist = camera.position.distanceTo(_orbitPivot);
+        pivotBall.scale.setScalar(dist * 0.008);
+        pivotBall.visible = true;
+      }
+
+      // Rotate camera around pivot point
+      const speed = 0.005;
+      const azimuth = -dx * speed;  // horizontal
+      const polar = -dy * speed;    // vertical
+
+      // Vector from pivot to camera
+      const offset = camera.position.clone().sub(_orbitPivot);
+
+      // Rotate around world Z (azimuth)
+      const qAz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), azimuth);
+      offset.applyQuaternion(qAz);
+
+      // Rotate around camera's local X (polar / elevation)
+      const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+      const qPol = new THREE.Quaternion().setFromAxisAngle(right, polar);
+      offset.applyQuaternion(qPol);
+
+      // Apply
+      camera.position.copy(_orbitPivot).add(offset);
+
+      // Also rotate the target by the same amount so lookAt direction stays consistent
+      const tOffset = controls.target.clone().sub(_orbitPivot);
+      tOffset.applyQuaternion(qAz);
+      tOffset.applyQuaternion(qPol);
+      controls.target.copy(_orbitPivot).add(tOffset);
+
+      camera.lookAt(controls.target);
+      _lastMouse = { x: e.clientX, y: e.clientY };
+    });
+
+    renderer.domElement.addEventListener('pointerup', () => {
+      if (_orbitActive) {
+        controls.enabled = true;
+        controls.update();
+      }
+      _orbitPivot = null;
+      _orbitActive = false;
+      _lastMouse = null;
+      setTimeout(() => { pivotBall.visible = false; }, 300);
+    });
+
+    // --- Scroll zoom toward mouse cursor ---
+    // Disable OrbitControls zoom, handle it ourselves.
+    controls.enableZoom = false;
+    let _mouseNdc = new THREE.Vector2();
+    renderer.domElement.addEventListener('mousemove', (e) => {
+      const rect = renderer.domElement.getBoundingClientRect();
+      _mouseNdc.set(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+    });
+    renderer.domElement.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomSpeed = 0.04;
+      const factor = e.deltaY > 0 ? -zoomSpeed : zoomSpeed;
+
+      // Ray from camera through mouse
+      const dir = new THREE.Vector3(_mouseNdc.x, _mouseNdc.y, 0.5)
+        .unproject(camera)
+        .sub(camera.position)
+        .normalize();
+
+      // Move camera along the mouse ray
+      const dist = camera.position.distanceTo(controls.target);
+      const step = dist * factor;
+      camera.position.addScaledVector(dir, step);
+      controls.target.addScaledVector(dir, step);
+      controls.update();
+    }, { passive: false });
+
+    // --- URL params ---
     const params = new URLSearchParams(window.location.search);
-    const tilesetParam = params.get('tileset') || 'testdata/tileset_output';
+    const tilesetParam = params.get('tileset') || '';
     const TILESET_BASE = '/tileset';
     const tilesetRoot = `${TILESET_BASE}/${tilesetParam}`;
 
+    // Filter state from URL (comma-separated)
+    function setFromParam(key) {
+      const v = params.get(key);
+      return v ? new Set(v.split(',').map(s => s.trim()).filter(Boolean)) : new Set();
+    }
+
+    // Models to load (positive list from URL; empty = none loaded initially)
+    const loadedModelNames = setFromParam('models');
+    const hiddenZones = setFromParam('hideZones');
+    const hiddenClasses = setFromParam('hideClasses');
+    const autoLoad = params.get('autoload') === '1';
+
+    function updateUrl() {
+      const np = new URLSearchParams();
+      np.set('tileset', tilesetParam);
+      if (loadedModelNames.size > 0) np.set('models', [...loadedModelNames].join(','));
+      if (hiddenZones.size > 0) np.set('hideZones', [...hiddenZones].join(','));
+      if (hiddenClasses.size > 0) np.set('hideClasses', [...hiddenClasses].join(','));
+      if (autoLoad) np.set('autoload', '1');
+      window.history.replaceState(null, '', `${window.location.pathname}?${np.toString()}`);
+    }
+
+    // --- Tileset selector ---
     async function initTilesetSelector() {
       const select = document.getElementById('tileset-select');
       try {
@@ -206,22 +361,19 @@
         select.innerHTML = `<option value="${tilesetParam}">${tilesetParam}</option>`;
       }
       select.addEventListener('change', () => {
-        const np = new URLSearchParams(window.location.search);
+        const np = new URLSearchParams();
         np.set('tileset', select.value);
         window.location.search = np.toString();
       });
     }
     initTilesetSelector();
 
-    // --- Filter state ---
-    const hiddenModels = new Set();
-    const hiddenZones = new Set();   // zone paths; prefix-matched against tile zone
-    const hiddenClasses = new Set();
+    // --- Data from tileset.json (parsed once, no downloads) ---
+    const modelRegistry = new Map(); // name -> { url, selected, loaded, zoneTree }
 
-    // Registry — populated as tiles load
-    const knownModels = new Map();   // model name -> element count
-    const knownClasses = new Map();  // class name -> element count
-    const zoneNodes = new Map();     // zone path -> { name, parent, childPaths[] }
+    // Zone/class registries (populated as tiles load)
+    const knownClasses = new Map();
+    const zoneNodes = new Map();
 
     function registerZonePath(zonePath) {
       const parts = zonePath.split('/');
@@ -239,16 +391,15 @@
     }
 
     function registerTileMeta(props) {
-      const { model, zone, ifcClass, elementCount = 0 } = props;
-      knownModels.set(model, (knownModels.get(model) || 0) + elementCount);
+      const { zone, ifcClass, elementCount = 0 } = props;
       knownClasses.set(ifcClass, (knownClasses.get(ifcClass) || 0) + elementCount);
       registerZonePath(zone);
     }
 
+    // --- Visibility (zone/class filters applied to loaded tiles) ---
     function isGroupVisible(meta) {
       if (!meta) return true;
-      const { model, zone, ifcClass } = meta;
-      if (hiddenModels.has(model)) return false;
+      const { zone, ifcClass } = meta;
       if (hiddenClasses.has(ifcClass)) return false;
       const parts = zone.split('/');
       for (let i = 1; i <= parts.length; i++) {
@@ -257,15 +408,12 @@
       return true;
     }
 
-    function applyFilter(group) {
-      group.visible = isGroupVisible(group.userData.tileMeta);
-    }
-
     function reapplyAllFilters() {
-      if (!tilesRenderer) return;
-      tilesRenderer.group.traverse(obj => {
-        if (obj.userData.tileMeta) applyFilter(obj);
-      });
+      for (const r of Object.values(modelRenderers)) {
+        r.group.traverse(obj => {
+          if (obj.userData.tileMeta) obj.visible = isGroupVisible(obj.userData.tileMeta);
+        });
+      }
     }
 
     function setZoneVisible(path, visible) {
@@ -274,40 +422,240 @@
       if (node) for (const child of node.childPaths) setZoneVisible(child, visible);
     }
 
-    // --- Filter UI (debounced rebuild) ---
-    let rebuildTimer = null;
-    function scheduleRebuild() {
-      if (rebuildTimer) clearTimeout(rebuildTimer);
-      rebuildTimer = setTimeout(rebuildFilterUI, 250);
+    // --- Per-model TilesRenderer instances ---
+    const modelRenderers = {};
+    let hasAutoZoomed = false;
+
+    function loadModel(name) {
+      const entry = modelRegistry.get(name);
+      if (!entry || modelRenderers[name]) return;
+
+      loadedModelNames.add(name);
+      entry.loaded = true;
+
+      const r = new TilesRenderer(entry.url);
+      r.registerPlugin(new UpdateOnChangePlugin());
+      r.setCamera(camera);
+      r.setResolutionFromRenderer(camera, renderer);
+      r.errorTarget = 8;
+      scene.add(r.group);
+      modelRenderers[name] = r;
+
+      r.addEventListener('load-model', (e) => {
+        const meta = e.tile?.metadata;
+        const group = e.scene;
+        if (meta?.class === 'IfcClassGroup' && meta?.properties && group) {
+          group.userData.tileMeta = meta.properties;
+          registerTileMeta(meta.properties);
+          group.visible = isGroupVisible(meta.properties);
+          scheduleFilterRebuild();
+        }
+        updateStats();
+        if (!hasAutoZoomed) {
+          hasAutoZoomed = true;
+          setTimeout(() => V.zoomToFit(), 800);
+        }
+      });
+      r.addEventListener('dispose-model', updateStats);
+      r.addEventListener('load-tile-set', updateStats);
+
+      updateUrl();
+      rebuildModelList();
     }
 
-    function rebuildFilterUI() {
-      rebuildList('fl-models', knownModels, hiddenModels, (key, vis) => {
-        if (vis) hiddenModels.delete(key); else hiddenModels.add(key);
-        reapplyAllFilters();
+    function unloadModel(name) {
+      const entry = modelRegistry.get(name);
+      if (entry) entry.loaded = false;
+      loadedModelNames.delete(name);
+
+      const r = modelRenderers[name];
+      if (r) {
+        scene.remove(r.group);
+        r.dispose();
+        delete modelRenderers[name];
+      }
+
+      updateUrl();
+      updateStats();
+      rebuildModelList();
+    }
+
+    // --- Parse root tileset to discover models (metadata only, no GLB loading) ---
+    async function discoverModels() {
+      const container = document.getElementById('fl-models');
+      try {
+        const rootTileset = await fetch(`${tilesetRoot}/tileset.json`).then(r => r.json());
+        const rootChildren = rootTileset.root?.children || [];
+
+        // Also try to pre-parse zone structure from model tilesets
+        for (const child of rootChildren) {
+          const name = child.metadata?.properties?.name || child.content?.uri?.split('/')[0];
+          const uri = child.content?.uri;
+          if (name && uri) {
+            const url = `${tilesetRoot}/${uri}`;
+            const shouldLoad = autoLoad || loadedModelNames.has(name);
+            modelRegistry.set(name, { url, selected: shouldLoad, loaded: false });
+          }
+        }
+
+        if (modelRegistry.size === 0) {
+          // Fallback: single tileset, auto-load
+          modelRegistry.set('default', { url: `${tilesetRoot}/tileset.json`, selected: true, loaded: false });
+        }
+
+        // Pre-parse zone tree from first model tileset (for zone panel)
+        await discoverZones(rootChildren);
+
+        // Build the model selection UI
+        rebuildModelList();
+
+        // Auto-load selected models
+        for (const [name, entry] of modelRegistry) {
+          if (entry.selected) loadModel(name);
+        }
+
+      } catch (err) {
+        console.error('[Viewer] Failed to load tileset:', err);
+        container.innerHTML = `<span class="ph">Error: ${err.message}</span>`;
+      }
+    }
+
+    // Pre-parse zone structure from model tilesets without loading GLBs
+    async function discoverZones(rootChildren) {
+      // Pick first model to discover zone structure
+      const firstModel = rootChildren[0];
+      if (!firstModel?.content?.uri) return;
+      try {
+        const modelTileset = await fetch(`${tilesetRoot}/${firstModel.content.uri}`).then(r => r.json());
+        function walkZones(node, parentPath) {
+          const meta = node.metadata;
+          if (meta?.class === 'Zone' && meta?.properties?.path) {
+            registerZonePath(meta.properties.path);
+          }
+          if (node.children) {
+            for (const child of node.children) walkZones(child, meta?.properties?.path || parentPath);
+          }
+        }
+        walkZones(modelTileset.root, '');
+        scheduleFilterRebuild();
+      } catch { /* zone discovery is best-effort */ }
+    }
+
+    discoverModels();
+
+    // --- Model list UI ---
+    function rebuildModelList() {
+      const container = document.getElementById('fl-models');
+      if (modelRegistry.size === 0) return;
+      container.innerHTML = '';
+
+      // Actions row
+      const actions = document.createElement('div');
+      actions.className = 'fsec-actions';
+
+      const btnLoadSel = document.createElement('button');
+      btnLoadSel.textContent = 'Load selected';
+      btnLoadSel.className = 'btn btn-primary';
+      btnLoadSel.addEventListener('click', () => {
+        for (const [name, entry] of modelRegistry) {
+          if (entry.selected && !entry.loaded) loadModel(name);
+          if (!entry.selected && entry.loaded) unloadModel(name);
+        }
       });
-      rebuildList('fl-classes', knownClasses, hiddenClasses, (key, vis) => {
-        if (vis) hiddenClasses.delete(key); else hiddenClasses.add(key);
-        reapplyAllFilters();
-      }, true /* sort by count */);
+
+      const btnAll = document.createElement('button');
+      btnAll.textContent = 'All';
+      btnAll.addEventListener('click', () => {
+        for (const entry of modelRegistry.values()) entry.selected = true;
+        rebuildModelList();
+      });
+
+      const btnNone = document.createElement('button');
+      btnNone.textContent = 'None';
+      btnNone.addEventListener('click', () => {
+        for (const entry of modelRegistry.values()) entry.selected = false;
+        rebuildModelList();
+      });
+
+      actions.append(btnLoadSel, btnAll, btnNone);
+      container.appendChild(actions);
+
+      // Model rows
+      const sorted = [...modelRegistry.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+      for (const [name, entry] of sorted) {
+        const row = document.createElement('label');
+        row.className = 'fi';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = entry.selected;
+        cb.addEventListener('change', () => {
+          entry.selected = cb.checked;
+          // If already loaded and unchecking, unload immediately
+          if (!cb.checked && entry.loaded) {
+            unloadModel(name);
+          }
+          // If checking and autoload or already applied, load immediately
+          if (cb.checked && !entry.loaded) {
+            loadModel(name);
+          }
+        });
+        const lbl = document.createElement('span');
+        lbl.className = 'fi-lbl';
+        lbl.textContent = name;
+        lbl.title = name;
+        const status = document.createElement('span');
+        status.className = `fi-status ${entry.loaded ? 'loaded' : 'pending'}`;
+        status.textContent = entry.loaded ? '●' : '○';
+        status.title = entry.loaded ? 'Loaded' : 'Not loaded';
+        row.append(cb, lbl, status);
+        container.appendChild(row);
+      }
+    }
+
+    // --- Zone/Class filter UI ---
+    let filterRebuildTimer = null;
+    function scheduleFilterRebuild() {
+      if (filterRebuildTimer) clearTimeout(filterRebuildTimer);
+      filterRebuildTimer = setTimeout(rebuildFilters, 250);
+    }
+
+    function rebuildFilters() {
+      rebuildClassList();
       rebuildZoneTree();
     }
 
-    function rebuildList(id, dataMap, hiddenSet, onToggle, sortByCount = false) {
-      const container = document.getElementById(id);
-      if (!container || dataMap.size === 0) return;
+    function rebuildClassList() {
+      const container = document.getElementById('fl-classes');
+      if (!container || knownClasses.size === 0) return;
       container.innerHTML = '';
-      let entries = [...dataMap];
-      entries.sort(sortByCount
-        ? (a, b) => b[1] - a[1]
-        : (a, b) => a[0].localeCompare(b[0]));
+
+      const actions = document.createElement('div');
+      actions.className = 'fsec-actions';
+      const btnAll = document.createElement('button');
+      btnAll.textContent = 'All';
+      btnAll.addEventListener('click', () => {
+        hiddenClasses.clear(); reapplyAllFilters(); updateUrl(); rebuildClassList();
+      });
+      const btnNone = document.createElement('button');
+      btnNone.textContent = 'None';
+      btnNone.addEventListener('click', () => {
+        for (const k of knownClasses.keys()) hiddenClasses.add(k);
+        reapplyAllFilters(); updateUrl(); rebuildClassList();
+      });
+      actions.append(btnAll, btnNone);
+      container.appendChild(actions);
+
+      const entries = [...knownClasses].sort((a, b) => b[1] - a[1]);
       for (const [key, count] of entries) {
         const row = document.createElement('label');
         row.className = 'fi';
         const cb = document.createElement('input');
         cb.type = 'checkbox';
-        cb.checked = !hiddenSet.has(key);
-        cb.addEventListener('change', () => { onToggle(key, cb.checked); });
+        cb.checked = !hiddenClasses.has(key);
+        cb.addEventListener('change', () => {
+          if (cb.checked) hiddenClasses.delete(key); else hiddenClasses.add(key);
+          reapplyAllFilters(); updateUrl();
+        });
         const lbl = document.createElement('span');
         lbl.className = 'fi-lbl';
         lbl.textContent = key;
@@ -324,6 +672,23 @@
       const container = document.getElementById('fl-zones');
       if (!container || zoneNodes.size === 0) return;
       container.innerHTML = '';
+
+      const actions = document.createElement('div');
+      actions.className = 'fsec-actions';
+      const btnAll = document.createElement('button');
+      btnAll.textContent = 'All';
+      btnAll.addEventListener('click', () => {
+        hiddenZones.clear(); reapplyAllFilters(); updateUrl(); rebuildZoneTree();
+      });
+      const btnNone = document.createElement('button');
+      btnNone.textContent = 'None';
+      btnNone.addEventListener('click', () => {
+        for (const k of zoneNodes.keys()) hiddenZones.add(k);
+        reapplyAllFilters(); updateUrl(); rebuildZoneTree();
+      });
+      actions.append(btnAll, btnNone);
+      container.appendChild(actions);
+
       const roots = [...zoneNodes.keys()].filter(p => !zoneNodes.get(p).parent).sort();
       for (const root of roots) container.appendChild(buildZoneEl(root));
     }
@@ -338,8 +703,7 @@
       cb.checked = !hiddenZones.has(path);
       cb.addEventListener('change', () => {
         setZoneVisible(path, cb.checked);
-        reapplyAllFilters();
-        rebuildZoneTree();
+        reapplyAllFilters(); updateUrl(); rebuildZoneTree();
       });
       const lbl = document.createElement('span');
       lbl.className = 'fi-lbl';
@@ -355,57 +719,20 @@
       return wrap;
     }
 
-    // --- 3D Tiles Renderer ---
-    let tilesRenderer = null;
-    let hasAutoZoomed = false;
-
-    function initTilesRenderer(url) {
-      if (tilesRenderer) {
-        scene.remove(tilesRenderer.group);
-        tilesRenderer.dispose();
-      }
-      hasAutoZoomed = false;
-      knownModels.clear(); knownClasses.clear(); zoneNodes.clear();
-      hiddenModels.clear(); hiddenZones.clear(); hiddenClasses.clear();
-
-      tilesRenderer = new TilesRenderer(url);
-      tilesRenderer.registerPlugin(new UnloadTilesPlugin({ bytesTarget: 600 * 1024 * 1024, delay: 2000 }));
-      tilesRenderer.registerPlugin(new UpdateOnChangePlugin());
-      tilesRenderer.setCamera(camera);
-      tilesRenderer.setResolutionFromRenderer(camera, renderer);
-      tilesRenderer.errorTarget = 8;
-      scene.add(tilesRenderer.group);
-
-      tilesRenderer.addEventListener('load-model', (e) => {
-        const meta = e.tile?.metadata;
-        const group = e.scene;
-        if (meta?.class === 'IfcClassGroup' && meta?.properties && group) {
-          group.userData.tileMeta = meta.properties;
-          registerTileMeta(meta.properties);
-          applyFilter(group);
-          scheduleRebuild();
-        }
-        updateStats();
-        if (!hasAutoZoomed) {
-          hasAutoZoomed = true;
-          setTimeout(() => V.zoomToFit(), 800);
-        }
-      });
-
-      tilesRenderer.addEventListener('dispose-model', updateStats);
-      tilesRenderer.addEventListener('load-tile-set', updateStats);
-
-      return tilesRenderer;
-    }
-
-    initTilesRenderer(`${tilesetRoot}/tileset.json`);
-
+    // --- Stats ---
     function updateStats() {
-      if (!tilesRenderer) return;
-      const s = tilesRenderer.stats;
+      let totalActive = 0, totalVis = 0, totalDownloading = 0;
+      const rendererCount = Object.keys(modelRenderers).length;
+      for (const r of Object.values(modelRenderers)) {
+        const s = r.stats;
+        totalActive += s.active;
+        totalVis += s.visible;
+        totalDownloading += s.downloading;
+      }
+      const sse = Object.values(modelRenderers)[0]?.errorTarget || 8;
       document.getElementById('stats').innerHTML =
-        `Tiles: ${s.visible} vis / ${s.active} act<br>` +
-        `Loading: ${s.downloading} | SSE: ${tilesRenderer.errorTarget}px`;
+        `Tiles: ${totalVis} vis / ${totalActive} act (${rendererCount} renderers)<br>` +
+        `Loading: ${totalDownloading} | SSE: ${sse}px`;
     }
     setInterval(updateStats, 1000);
 
@@ -413,10 +740,10 @@
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
-      if (tilesRenderer) {
-        tilesRenderer.setCamera(camera);
-        tilesRenderer.setResolutionFromRenderer(camera, renderer);
-        tilesRenderer.update();
+      for (const r of Object.values(modelRenderers)) {
+        r.setCamera(camera);
+        r.setResolutionFromRenderer(camera, renderer);
+        r.update();
       }
       renderer.render(scene, camera);
     }
@@ -428,24 +755,30 @@
     V._camera = camera;
     V._controls = controls;
     V._renderer = renderer;
-    V._tiles = () => tilesRenderer;
+    V._tiles = () => modelRenderers;
 
     V.errorTarget = (val) => {
-      if (val !== undefined && tilesRenderer) tilesRenderer.errorTarget = val;
+      if (val !== undefined) {
+        for (const r of Object.values(modelRenderers)) r.errorTarget = val;
+      }
       updateStats();
-      return { errorTarget: tilesRenderer?.errorTarget };
+      return { errorTarget: val || Object.values(modelRenderers)[0]?.errorTarget };
     };
 
     V.quality = (preset) => {
       const presets = { high: 2, medium: 8, low: 20 };
       const val = presets[preset];
       if (val === undefined) return { error: `Use: ${Object.keys(presets).join(', ')}` };
-      if (tilesRenderer) tilesRenderer.errorTarget = val;
+      for (const r of Object.values(modelRenderers)) r.errorTarget = val;
       updateStats();
       return { preset, errorTarget: val };
     };
 
-    V.tileStats = () => ({ ...tilesRenderer?.stats });
+    V.tileStats = () => {
+      const result = {};
+      for (const [name, r] of Object.entries(modelRenderers)) result[name] = { ...r.stats };
+      return result;
+    };
 
     V.nodes = () => {
       const names = [];
@@ -608,48 +941,53 @@
 
     V.inspect = (filter) => { V.showAll(); V.unhighlight(); return { ...V.xray(filter, 0.05), ...V.zoomToFit(filter) }; };
 
-    // Programmatic filter API
     V.filter = {
-      hideModel:  (m) => { hiddenModels.add(m);      reapplyAllFilters(); scheduleRebuild(); },
-      showModel:  (m) => { hiddenModels.delete(m);   reapplyAllFilters(); scheduleRebuild(); },
-      hideClass:  (c) => { hiddenClasses.add(c);     reapplyAllFilters(); scheduleRebuild(); },
-      showClass:  (c) => { hiddenClasses.delete(c);  reapplyAllFilters(); scheduleRebuild(); },
-      hideZone:   (z) => { setZoneVisible(z, false); reapplyAllFilters(); scheduleRebuild(); },
-      showZone:   (z) => { setZoneVisible(z, true);  reapplyAllFilters(); scheduleRebuild(); },
-      reset:      ()  => { hiddenModels.clear(); hiddenZones.clear(); hiddenClasses.clear(); reapplyAllFilters(); scheduleRebuild(); },
-      state:      ()  => ({ models: [...hiddenModels], zones: [...hiddenZones], classes: [...hiddenClasses] }),
+      hideModel:  (m) => { unloadModel(m); scheduleFilterRebuild(); },
+      showModel:  (m) => { loadModel(m); scheduleFilterRebuild(); },
+      hideClass:  (c) => { hiddenClasses.add(c); reapplyAllFilters(); updateUrl(); scheduleFilterRebuild(); },
+      showClass:  (c) => { hiddenClasses.delete(c); reapplyAllFilters(); updateUrl(); scheduleFilterRebuild(); },
+      hideZone:   (z) => { setZoneVisible(z, false); reapplyAllFilters(); updateUrl(); scheduleFilterRebuild(); },
+      showZone:   (z) => { setZoneVisible(z, true); reapplyAllFilters(); updateUrl(); scheduleFilterRebuild(); },
+      reset:      ()  => {
+        for (const name of modelRegistry.keys()) {
+          const entry = modelRegistry.get(name);
+          entry.selected = true;
+          if (!entry.loaded) loadModel(name);
+        }
+        hiddenZones.clear(); hiddenClasses.clear();
+        reapplyAllFilters(); updateUrl(); scheduleFilterRebuild();
+      },
+      state:      ()  => ({
+        loaded: [...loadedModelNames],
+        hiddenZones: [...hiddenZones],
+        hiddenClasses: [...hiddenClasses],
+        available: [...modelRegistry.keys()],
+      }),
     };
 
     V.help = () => ({
       'V.errorTarget(n)': 'Set SSE pixel threshold (lower=more detail). Default 8.',
       'V.quality("high"|"medium"|"low")': 'Preset: high=2px, medium=8px, low=20px',
-      'V.tileStats()': '3d-tiles-renderer stats',
+      'V.tileStats()': '3d-tiles-renderer stats per model',
+      'V.filter.hideModel("B-290")': 'Unload a model (disposes renderer & frees memory)',
+      'V.filter.showModel("B-290")': 'Load a model',
       'V.filter.hideClass("IfcWall")': 'Hide all tiles of a class',
-      'V.filter.showZone("D0/HAV0")': 'Show a zone (prefix propagates to children)',
-      'V.filter.hideModel("B-290")': 'Hide a model',
-      'V.filter.reset()': 'Clear all filters',
+      'V.filter.showZone("D0/HAV0")': 'Show a zone',
+      'V.filter.reset()': 'Load all models, clear all filters',
       'V.filter.state()': 'Show current filter state',
       'V.nodes()': 'List all mesh names',
       'V.find(q)': 'Search mesh names by substring',
       'V.stats()': 'Scene mesh/tri/vert counts',
-      'V.zoomToFit(filter?)': 'Zoom to visible (or filtered) meshes',
+      'V.zoomToFit(filter?)': 'Zoom to visible meshes',
       'V.focusOn(filter)': 'Isolate + zoom',
       'V.isolate(filter)': 'Show only matching meshes',
       'V.showAll()': 'Show all meshes',
-      'V.hide(filter)': 'Hide matching meshes',
-      'V.setCamera([x,y,z],[tx,ty,tz])': 'Set camera position and target',
-      'V.getCamera()': 'Get current camera state',
-      'V.highlight(filter, color?)': 'Color matching meshes (default red)',
-      'V.unhighlight(filter?)': 'Restore original materials',
-      'V.wireframe(on?, filter?)': 'Toggle wireframe',
-      'V.xray(filter, opacity?)': 'X-ray: fade everything except match',
-      'V.inspect(filter)': 'X-ray + zoom to fit',
+      'V.setCamera([x,y,z],[tx,ty,tz])': 'Set camera position/target',
     });
 
     window.V = V;
-    console.log('[Viewer] ready. V.help() for commands. V.filter for filtering.');
-    console.log(`[Viewer] Loading: ${tilesetRoot}/tileset.json`);
-    console.log('[Viewer] Orbit pivot: left-click to set pivot at mouse hit point');
+    console.log('[Viewer] ready. Models discovered from tileset — check/uncheck to load/unload.');
+    console.log('[Viewer] URL params: ?models=A,B&hideZones=D0/HAV0&hideClasses=IfcCovering');
   </script>
 </body>
 </html>

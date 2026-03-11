@@ -22,7 +22,8 @@ pub fn extract_reference(
     volume_mode: &str,
     verbosity: Verbosity,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let content = std::fs::read_to_string(input)?;
+    let raw = std::fs::read(input)?;
+    let content = String::from_utf8_lossy(&raw).into_owned();
     let quiet = verbosity == Verbosity::Quiet;
 
     if !quiet {

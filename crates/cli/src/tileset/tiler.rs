@@ -36,7 +36,8 @@ pub fn generate_tileset(
         let model_dir = output_dir.join(model_name);
         std::fs::create_dir_all(&model_dir)?;
 
-        let content = std::fs::read_to_string(ifc_path)?;
+        let raw = std::fs::read(ifc_path)?;
+        let content = String::from_utf8_lossy(&raw).into_owned();
         let meshes = processor::process_ifc(&content, config);
 
         if !quiet {
@@ -158,6 +159,18 @@ pub fn generate_tileset(
     }
 
     let root_ge = root_aabb.bounding_sphere_radius();
+    let mut root_node = TileNode {
+        bounding_volume: BoundingVolume {
+            bbox: root_aabb.to_3dtiles_box(),
+        },
+        geometric_error: root_ge,
+        refine: Some("ADD".to_string()),
+        metadata: None,
+        content: None,
+        children: model_tiles,
+    };
+    enforce_ge_monotonicity(&mut root_node);
+
     let root_tileset = Tileset {
         asset: TilesetAsset {
             version: "1.1".to_string(),
@@ -169,16 +182,7 @@ pub fn generate_tileset(
             id: "ifc-lite-schema".to_string(),
             classes: tileset_schema_classes(),
         }),
-        root: TileNode {
-            bounding_volume: BoundingVolume {
-                bbox: root_aabb.to_3dtiles_box(),
-            },
-            geometric_error: root_ge,
-            refine: Some("ADD".to_string()),
-            metadata: None,
-            content: None,
-            children: model_tiles,
-        },
+        root: root_node,
     };
 
     let root_json = serde_json::to_string_pretty(&root_tileset)?;
@@ -243,6 +247,9 @@ fn build_model_tileset(
         children,
     };
 
+    let mut model_root_fixed = model_root.clone();
+    enforce_ge_monotonicity(&mut model_root_fixed);
+
     let model_tileset = Tileset {
         asset: TilesetAsset {
             version: "1.1".to_string(),
@@ -251,7 +258,7 @@ fn build_model_tileset(
         },
         geometric_error: model_ge,
         schema: None,
-        root: model_root.clone(),
+        root: model_root_fixed,
     };
 
     let json = serde_json::to_string_pretty(&model_tileset)?;
@@ -320,18 +327,16 @@ fn build_zone_tile(
         return None;
     }
 
-    let has_sub_zones = children.iter().any(|c| !c.children.is_empty());
-    let zone_ge = if has_sub_zones {
-        zone_aabb.bounding_sphere_radius()
-    } else {
-        zone_aabb.bounding_sphere_radius() * 0.5
-    };
+    // Contentless zone nodes must have high GE so the renderer always
+    // traverses down to the leaf content tiles (GLBs).
+    // Use a very large value; enforce_ge_monotonicity will cap it relative to parent.
+    let zone_ge = 1e6;
     Some(TileNode {
         bounding_volume: BoundingVolume {
             bbox: zone_aabb.to_3dtiles_box(),
         },
         geometric_error: zone_ge,
-        refine: None,
+        refine: Some("ADD".to_string()),
         metadata: Some(TileMetadata {
             class: "Zone".to_string(),
             properties: serde_json::json!({
@@ -379,13 +384,13 @@ fn build_leaf_zone_tile(
         });
     }
 
-    let zone_ge = zone_aabb.bounding_sphere_radius() * 0.5;
+    let zone_ge = 1e6;
     let node = TileNode {
         bounding_volume: BoundingVolume {
             bbox: zone_aabb.to_3dtiles_box(),
         },
         geometric_error: zone_ge,
-        refine: None,
+        refine: Some("ADD".to_string()),
         metadata: Some(TileMetadata {
             class: "Zone".to_string(),
             properties: serde_json::json!({
@@ -399,6 +404,18 @@ fn build_leaf_zone_tile(
     };
 
     (node, zone_aabb)
+}
+
+/// Enforce geometric error monotonicity: every child must have GE < parent.
+/// Recursively caps children at `parent_ge * 0.5` if they exceed the parent.
+fn enforce_ge_monotonicity(node: &mut TileNode) {
+    let parent_ge = node.geometric_error;
+    for child in &mut node.children {
+        if child.geometric_error >= parent_ge {
+            child.geometric_error = parent_ge * 0.5;
+        }
+        enforce_ge_monotonicity(child);
+    }
 }
 
 fn bbox_to_aabb(bbox: &[f64; 12]) -> Aabb {

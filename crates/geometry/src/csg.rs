@@ -852,17 +852,30 @@ impl ClippingProcessor {
             }
 
             let base = cleaned.vertex_count() as u32;
+            let has_normals = mesh.normals.len() >= mesh.positions.len();
+            // Compute face normal as fallback when normals are missing
+            let face_normal = if !has_normals {
+                let cross = edge1.cross(&edge2);
+                let len = cross.norm();
+                if len > 0.0 { cross / len } else { Vector3::new(0.0, 0.0, 1.0) }
+            } else {
+                Vector3::zeros()
+            };
             for &idx in &ids {
                 let p = Point3::new(
                     mesh.positions[idx * 3] as f64,
                     mesh.positions[idx * 3 + 1] as f64,
                     mesh.positions[idx * 3 + 2] as f64,
                 );
-                let n = Vector3::new(
-                    mesh.normals[idx * 3] as f64,
-                    mesh.normals[idx * 3 + 1] as f64,
-                    mesh.normals[idx * 3 + 2] as f64,
-                );
+                let n = if has_normals {
+                    Vector3::new(
+                        mesh.normals[idx * 3] as f64,
+                        mesh.normals[idx * 3 + 1] as f64,
+                        mesh.normals[idx * 3 + 2] as f64,
+                    )
+                } else {
+                    face_normal
+                };
                 cleaned.add_vertex(p, n);
             }
             cleaned.add_triangle(base, base + 1, base + 2);
