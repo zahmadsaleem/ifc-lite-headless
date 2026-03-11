@@ -85,6 +85,10 @@ pub struct TilesetAsset {
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub generator: Option<String>,
+    /// Tell 3d-tiles-renderer our GLBs are Z-up (IFC convention).
+    /// Without this it defaults to 'y' and rotates all geometry 90° around X.
+    #[serde(rename = "gltfUpAxis", skip_serializing_if = "Option::is_none")]
+    pub gltf_up_axis: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -171,6 +175,14 @@ impl Aabb {
 
     pub fn is_valid(&self) -> bool {
         self.min[0] <= self.max[0] && self.min[1] <= self.max[1] && self.min[2] <= self.max[2]
+    }
+
+    /// Bounding sphere radius (half the diagonal). Used for computing geometricError.
+    pub fn bounding_sphere_radius(&self) -> f64 {
+        let dx = self.max[0] - self.min[0];
+        let dy = self.max[1] - self.min[1];
+        let dz = self.max[2] - self.min[2];
+        (dx * dx + dy * dy + dz * dz).sqrt() / 2.0
     }
 
     /// Convert to 3D Tiles box format: [cx, cy, cz, hx, 0, 0, 0, hy, 0, 0, 0, hz]

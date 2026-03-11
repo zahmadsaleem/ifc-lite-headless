@@ -60,11 +60,11 @@ tasks:
       - node_modules/.package-lock.json
 
   viewer:dev:
-    desc: Start the Cesium viewer dev server
+    desc: Start the viewer dev server (runs from viewer/ dir; serves all tilesets under ../.private)
     deps: [viewer:install]
     dir: '{{.VIEWER_DIR}}'
     cmds:
-      - bun run server.ts {{.TEST_TILESET}}
+      - bun run server.ts ../.private
 
   # --- Combined ---
 

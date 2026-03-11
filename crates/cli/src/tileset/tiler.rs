@@ -125,9 +125,11 @@ pub fn generate_tileset(
             root_aabb = root_aabb.union(&model_aabb);
         }
 
+        let model_aabb_for_ge = bbox_to_aabb(&model_tile.bounding_volume.bbox);
+        let model_ge = model_aabb_for_ge.bounding_sphere_radius() * 0.5;
         model_tiles.push(TileNode {
             bounding_volume: model_tile.bounding_volume.clone(),
-            geometric_error: 50.0,
+            geometric_error: model_ge,
             refine: None,
             metadata: Some(TileMetadata {
                 class: "Model".to_string(),
@@ -155,12 +157,14 @@ pub fn generate_tileset(
         };
     }
 
+    let root_ge = root_aabb.bounding_sphere_radius();
     let root_tileset = Tileset {
         asset: TilesetAsset {
             version: "1.1".to_string(),
             generator: Some("ifc-lite-headless".to_string()),
+            gltf_up_axis: Some("z".to_string()),
         },
-        geometric_error: 100.0,
+        geometric_error: root_ge,
         schema: Some(TilesetSchema {
             id: "ifc-lite-schema".to_string(),
             classes: tileset_schema_classes(),
@@ -169,7 +173,7 @@ pub fn generate_tileset(
             bounding_volume: BoundingVolume {
                 bbox: root_aabb.to_3dtiles_box(),
             },
-            geometric_error: 100.0,
+            geometric_error: root_ge,
             refine: Some("ADD".to_string()),
             metadata: None,
             content: None,
@@ -227,11 +231,12 @@ fn build_model_tileset(
         };
     }
 
+    let model_ge = model_aabb.bounding_sphere_radius() * 0.5;
     let model_root = TileNode {
         bounding_volume: BoundingVolume {
             bbox: model_aabb.to_3dtiles_box(),
         },
-        geometric_error: 50.0,
+        geometric_error: model_ge,
         refine: Some("ADD".to_string()),
         metadata: None,
         content: None,
@@ -242,8 +247,9 @@ fn build_model_tileset(
         asset: TilesetAsset {
             version: "1.1".to_string(),
             generator: Some("ifc-lite-headless".to_string()),
+            gltf_up_axis: Some("z".to_string()),
         },
-        geometric_error: 50.0,
+        geometric_error: model_ge,
         schema: None,
         root: model_root.clone(),
     };
@@ -314,15 +320,17 @@ fn build_zone_tile(
         return None;
     }
 
+    let has_sub_zones = children.iter().any(|c| !c.children.is_empty());
+    let zone_ge = if has_sub_zones {
+        zone_aabb.bounding_sphere_radius()
+    } else {
+        zone_aabb.bounding_sphere_radius() * 0.5
+    };
     Some(TileNode {
         bounding_volume: BoundingVolume {
             bbox: zone_aabb.to_3dtiles_box(),
         },
-        geometric_error: if children.iter().any(|c| !c.children.is_empty()) {
-            10.0
-        } else {
-            5.0
-        },
+        geometric_error: zone_ge,
         refine: None,
         metadata: Some(TileMetadata {
             class: "Zone".to_string(),
@@ -371,11 +379,12 @@ fn build_leaf_zone_tile(
         });
     }
 
+    let zone_ge = zone_aabb.bounding_sphere_radius() * 0.5;
     let node = TileNode {
         bounding_volume: BoundingVolume {
             bbox: zone_aabb.to_3dtiles_box(),
         },
-        geometric_error: 5.0,
+        geometric_error: zone_ge,
         refine: None,
         metadata: Some(TileMetadata {
             class: "Zone".to_string(),

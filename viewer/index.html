@@ -8,72 +8,107 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body { width: 100%; height: 100%; overflow: hidden; background: #1e1e2e; }
     canvas { display: block; }
-    #controls {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      z-index: 1000;
-      background: rgba(0,0,0,0.85);
-      color: #fff;
-      padding: 12px 16px;
-      border-radius: 6px;
-      font-family: monospace;
-      font-size: 13px;
-      max-height: 90vh;
-      overflow-y: auto;
-      min-width: 240px;
+    #panel {
+      position: absolute; top: 10px; left: 10px; z-index: 1000;
+      background: rgba(0,0,0,0.87); color: #fff;
+      border-radius: 6px; font-family: monospace; font-size: 13px;
+      max-height: 90vh; overflow-y: auto;
+      min-width: 240px; max-width: 280px;
     }
-    #controls h3 { margin-bottom: 8px; font-size: 14px; }
+    #panel-header {
+      padding: 10px 14px; cursor: pointer; user-select: none;
+      font-size: 14px; font-weight: bold;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #panel-header:hover { color: #4fc3f7; }
+    #panel-body { padding: 0 10px 10px; }
+
+    select.ts-select {
+      width: 100%; background: #222; color: #eee;
+      border: 1px solid #555; padding: 3px 4px; margin-bottom: 6px;
+      font-family: monospace; font-size: 12px; border-radius: 3px; cursor: pointer;
+    }
+
+    .fsec { border-top: 1px solid #2a2a3a; padding-top: 4px; margin-top: 4px; }
+    .fsec-hdr {
+      cursor: pointer; user-select: none; font-size: 11px; color: #778;
+      padding: 2px 0 3px; display: flex; align-items: center; justify-content: space-between;
+    }
+    .fsec-hdr:hover { color: #aab; }
+    .fsec-body { padding: 0 0 2px 2px; }
+
+    .fi {
+      display: flex; align-items: center; gap: 5px;
+      padding: 1px 0; font-size: 12px; cursor: pointer; user-select: none;
+    }
+    .fi:hover .fi-lbl { color: #4fc3f7; }
+    .fi input[type=checkbox] { cursor: pointer; accent-color: #4fc3f7; flex-shrink: 0; }
+    .fi-lbl { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .fi-cnt { color: #555; font-size: 10px; flex-shrink: 0; }
+    .zt-children { padding-left: 14px; }
+
     #stats {
-      margin-top: 10px;
-      padding-top: 8px;
-      border-top: 1px solid #555;
-      color: #aaa;
+      margin-top: 6px; padding-top: 6px; border-top: 1px solid #2a2a3a;
+      color: #778; font-size: 11px; line-height: 1.6;
     }
-    #error { color: #ff5252; margin-top: 8px; }
-    details { margin: 4px 0; }
-    details summary { cursor: pointer; padding: 2px 0; }
-    details summary:hover { color: #4fc3f7; }
-    .indent { padding-left: 16px; }
-    .class-item {
-      display: block;
-      padding: 1px 0 1px 16px;
-      color: #aaa;
-      font-size: 12px;
-    }
+    .ph { color: #445; font-size: 11px; }
   </style>
   <script type="importmap">
     {
       "imports": {
         "three": "/node_modules/three/build/three.module.js",
-        "three/examples/jsm/": "/node_modules/three/examples/jsm/"
+        "three/examples/jsm/": "/node_modules/three/examples/jsm/",
+        "3d-tiles-renderer": "/node_modules/3d-tiles-renderer/src/index.js",
+        "3d-tiles-renderer/plugins": "/node_modules/3d-tiles-renderer/src/plugins/index.js"
       }
     }
   </script>
 </head>
 <body>
-  <div id="controls">
-    <div id="nav-toggle" style="cursor:pointer;user-select:none;font-size:14px;font-weight:bold;">
-      IFC-Lite Tileset Viewer <span id="nav-arrow">▶</span>
-    </div>
-    <div id="nav-content" style="display:none;">
-      <div id="zoneTree">Loading...</div>
+  <div id="panel">
+    <div id="panel-header">IFC-Lite Viewer <span id="panel-arrow">▼</span></div>
+    <div id="panel-body">
+      <div style="color:#556;font-size:11px;margin-bottom:3px">Tileset:</div>
+      <select class="ts-select" id="tileset-select"><option>Loading…</option></select>
+
+      <div class="fsec">
+        <div class="fsec-hdr" data-target="fl-models">
+          <span>Models</span><span class="fsa">▼</span>
+        </div>
+        <div id="fl-models" class="fsec-body"><span class="ph">—</span></div>
+      </div>
+
+      <div class="fsec">
+        <div class="fsec-hdr" data-target="fl-zones">
+          <span>Zones</span><span class="fsa">▼</span>
+        </div>
+        <div id="fl-zones" class="fsec-body"><span class="ph">—</span></div>
+      </div>
+
+      <div class="fsec">
+        <div class="fsec-hdr" data-target="fl-classes">
+          <span>Classes</span><span class="fsa">▼</span>
+        </div>
+        <div id="fl-classes" class="fsec-body"><span class="ph">—</span></div>
+      </div>
+
       <div id="stats"></div>
-      <div id="error"></div>
     </div>
   </div>
 
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+    import { TilesRenderer } from '3d-tiles-renderer';
+    import { UnloadTilesPlugin, UpdateOnChangePlugin } from '3d-tiles-renderer/plugins';
 
     // --- Three.js setup ---
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1e1e2e);
 
-    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10000);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1.0, 100000);
     camera.position.set(200, 200, 200);
-    camera.up.set(0, 0, 1); // Z-up to match IFC
+    camera.up.set(0, 0, 1);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
@@ -85,486 +120,536 @@
     controls.enableDamping = true;
     controls.dampingFactor = 0.1;
 
-    // Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-    scene.add(ambientLight);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dl1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    dl1.position.set(100, 200, 300);
+    scene.add(dl1);
+    const dl2 = new THREE.DirectionalLight(0xffffff, 0.3);
+    dl2.position.set(-100, -100, 100);
+    scene.add(dl2);
 
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    dirLight.position.set(100, 200, 300);
-    scene.add(dirLight);
-
-    const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.3);
-    dirLight2.position.set(-100, -100, 100);
-    scene.add(dirLight2);
-
-    // Grid
-    const gridHelper = new THREE.GridHelper(500, 50, 0x444466, 0x333355);
-    gridHelper.rotation.x = Math.PI / 2; // rotate to XY plane (Z-up)
+    const gridHelper = new THREE.GridHelper(2000, 50, 0x444466, 0x333355);
+    gridHelper.rotation.x = Math.PI / 2;
     scene.add(gridHelper);
+    scene.add(new THREE.AxesHelper(20));
 
-    // Axes
-    const axesHelper = new THREE.AxesHelper(20);
-    scene.add(axesHelper);
-
-    // Resize
     window.addEventListener('resize', () => {
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(window.innerWidth, window.innerHeight);
+      if (tilesRenderer) tilesRenderer.setResolutionFromRenderer(camera, renderer);
     });
 
-    // Nav toggle (collapsed by default)
-    document.getElementById('nav-toggle').addEventListener('click', () => {
-      const content = document.getElementById('nav-content');
-      const arrow = document.getElementById('nav-arrow');
-      const open = content.style.display !== 'none';
-      content.style.display = open ? 'none' : 'block';
+    // --- Panel toggle ---
+    document.getElementById('panel-header').addEventListener('click', () => {
+      const body = document.getElementById('panel-body');
+      const arrow = document.getElementById('panel-arrow');
+      const open = body.style.display !== 'none';
+      body.style.display = open ? 'none' : '';
       arrow.textContent = open ? '▶' : '▼';
     });
 
-    // --- URL params for filtering ---
-    // ?classes=IfcWall,IfcSlab  - only load these IFC classes
-    // ?zones=Plan_01,Plan_02    - only load these zones (matches zone path segments)
-    // ?model=architectural      - which model subdir to load (default: model)
+    // --- Filter section collapse/expand ---
+    document.querySelectorAll('.fsec-hdr').forEach(hdr => {
+      hdr.addEventListener('click', () => {
+        const body = document.getElementById(hdr.dataset.target);
+        const arrow = hdr.querySelector('.fsa');
+        const open = body.style.display !== 'none';
+        body.style.display = open ? 'none' : '';
+        if (arrow) arrow.textContent = open ? '▶' : '▼';
+      });
+    });
+
+    // --- Orbit pivot: set pivot at mouse hit point ---
+    const raycaster = new THREE.Raycaster();
+    renderer.domElement.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || !tilesRenderer) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const ndc = new THREE.Vector2(
+        ((e.clientX - rect.left) / rect.width) * 2 - 1,
+        -((e.clientY - rect.top) / rect.height) * 2 + 1,
+      );
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects([tilesRenderer.group], true);
+      if (hits.length > 0) {
+        controls.target.copy(hits[0].point);
+        controls.update();
+      }
+    });
+
+    // --- URL params & tileset selector ---
     const params = new URLSearchParams(window.location.search);
-    const filterClasses = params.get('classes')?.split(',').map(s => s.trim()) || null;
-    const filterZones = params.get('zones')?.split(',').map(s => s.trim()) || null;
-    const modelName = params.get('model') || 'model';
+    const tilesetParam = params.get('tileset') || 'testdata/tileset_output';
+    const TILESET_BASE = '/tileset';
+    const tilesetRoot = `${TILESET_BASE}/${tilesetParam}`;
 
-    const TILESET_BASE = `/tileset/${modelName}`;
+    async function initTilesetSelector() {
+      const select = document.getElementById('tileset-select');
+      try {
+        const tilesets = await fetch('/api/tilesets').then(r => r.json());
+        select.innerHTML = '';
+        for (const ts of tilesets) {
+          const opt = document.createElement('option');
+          opt.value = ts.path;
+          opt.textContent = ts.label;
+          if (ts.path === tilesetParam) opt.selected = true;
+          select.appendChild(opt);
+        }
+        if (!tilesets.some(ts => ts.path === tilesetParam)) {
+          const opt = document.createElement('option');
+          opt.value = tilesetParam;
+          opt.textContent = tilesetParam;
+          opt.selected = true;
+          select.insertBefore(opt, select.firstChild);
+        }
+      } catch {
+        select.innerHTML = `<option value="${tilesetParam}">${tilesetParam}</option>`;
+      }
+      select.addEventListener('change', () => {
+        const np = new URLSearchParams(window.location.search);
+        np.set('tileset', select.value);
+        window.location.search = np.toString();
+      });
+    }
+    initTilesetSelector();
 
-    function matchesFilter(tile) {
-      const meta = tile.metadata;
-      if (!meta || meta.class !== 'IfcClassGroup') return true; // non-leaf nodes pass
+    // --- Filter state ---
+    const hiddenModels = new Set();
+    const hiddenZones = new Set();   // zone paths; prefix-matched against tile zone
+    const hiddenClasses = new Set();
 
-      const ifcClass = meta.properties?.ifcClass || '';
-      const zone = meta.properties?.zone || '';
+    // Registry — populated as tiles load
+    const knownModels = new Map();   // model name -> element count
+    const knownClasses = new Map();  // class name -> element count
+    const zoneNodes = new Map();     // zone path -> { name, parent, childPaths[] }
 
-      if (filterClasses && !filterClasses.includes(ifcClass)) return false;
-      if (filterZones && !filterZones.some(z => zone.includes(z))) return false;
+    function registerZonePath(zonePath) {
+      const parts = zonePath.split('/');
+      for (let i = 1; i <= parts.length; i++) {
+        const path = parts.slice(0, i).join('/');
+        if (!zoneNodes.has(path)) {
+          const parent = i > 1 ? parts.slice(0, i - 1).join('/') : null;
+          zoneNodes.set(path, { name: parts[i - 1], parent, childPaths: [] });
+          if (parent) {
+            const pNode = zoneNodes.get(parent);
+            if (pNode && !pNode.childPaths.includes(path)) pNode.childPaths.push(path);
+          }
+        }
+      }
+    }
+
+    function registerTileMeta(props) {
+      const { model, zone, ifcClass, elementCount = 0 } = props;
+      knownModels.set(model, (knownModels.get(model) || 0) + elementCount);
+      knownClasses.set(ifcClass, (knownClasses.get(ifcClass) || 0) + elementCount);
+      registerZonePath(zone);
+    }
+
+    function isGroupVisible(meta) {
+      if (!meta) return true;
+      const { model, zone, ifcClass } = meta;
+      if (hiddenModels.has(model)) return false;
+      if (hiddenClasses.has(ifcClass)) return false;
+      const parts = zone.split('/');
+      for (let i = 1; i <= parts.length; i++) {
+        if (hiddenZones.has(parts.slice(0, i).join('/'))) return false;
+      }
       return true;
     }
 
-    async function loadTileset() {
-      const errorDiv = document.getElementById('error');
-      const zoneTree = document.getElementById('zoneTree');
+    function applyFilter(group) {
+      group.visible = isGroupVisible(group.userData.tileMeta);
+    }
 
-      try {
-        const tilesetJson = await fetch(`${TILESET_BASE}/tileset.json`).then(r => r.json());
+    function reapplyAllFilters() {
+      if (!tilesRenderer) return;
+      tilesRenderer.group.traverse(obj => {
+        if (obj.userData.tileMeta) applyFilter(obj);
+      });
+    }
 
-        // Collect all GLB URIs from tile tree, applying filters
-        const tiles = [];
-        collectTiles(tilesetJson.root, tiles);
+    function setZoneVisible(path, visible) {
+      if (visible) hiddenZones.delete(path); else hiddenZones.add(path);
+      const node = zoneNodes.get(path);
+      if (node) for (const child of node.childPaths) setZoneVisible(child, visible);
+    }
 
-        const activeFilters = [];
-        if (filterClasses) activeFilters.push(`classes=${filterClasses.join(',')}`);
-        if (filterZones) activeFilters.push(`zones=${filterZones.join(',')}`);
+    // --- Filter UI (debounced rebuild) ---
+    let rebuildTimer = null;
+    function scheduleRebuild() {
+      if (rebuildTimer) clearTimeout(rebuildTimer);
+      rebuildTimer = setTimeout(rebuildFilterUI, 250);
+    }
 
-        zoneTree.innerHTML = '';
-        if (activeFilters.length > 0) {
-          const filterDiv = document.createElement('div');
-          filterDiv.style.cssText = 'color:#4fc3f7;margin-bottom:8px;font-size:11px';
-          filterDiv.textContent = `Filter: ${activeFilters.join(' | ')}`;
-          zoneTree.appendChild(filterDiv);
-        }
-        buildZoneUI(tilesetJson.root, zoneTree);
+    function rebuildFilterUI() {
+      rebuildList('fl-models', knownModels, hiddenModels, (key, vis) => {
+        if (vis) hiddenModels.delete(key); else hiddenModels.add(key);
+        reapplyAllFilters();
+      });
+      rebuildList('fl-classes', knownClasses, hiddenClasses, (key, vis) => {
+        if (vis) hiddenClasses.delete(key); else hiddenClasses.add(key);
+        reapplyAllFilters();
+      }, true /* sort by count */);
+      rebuildZoneTree();
+    }
 
-        document.getElementById('stats').textContent = `Loading ${tiles.length} tiles...`;
-
-        // Load all GLBs
-        const gltfLoader = new (await import('three/examples/jsm/loaders/GLTFLoader.js')).GLTFLoader();
-
-        let loaded = 0;
-        const allBounds = new THREE.Box3();
-
-        const loadPromises = tiles.map(tile => {
-          const url = `${TILESET_BASE}/${tile.uri}`;
-          return new Promise((resolve) => {
-            gltfLoader.load(url, (gltf) => {
-              scene.add(gltf.scene);
-
-              const box = new THREE.Box3().setFromObject(gltf.scene);
-              allBounds.union(box);
-
-              loaded++;
-              document.getElementById('stats').textContent = `Loaded ${loaded}/${tiles.length} tiles`;
-              resolve(gltf);
-            }, undefined, (err) => {
-              console.warn(`Failed to load ${url}:`, err);
-              loaded++;
-              document.getElementById('stats').textContent = `Loaded ${loaded}/${tiles.length} tiles`;
-              resolve(null);
-            });
-          });
-        });
-
-        await Promise.all(loadPromises);
-
-        // Center camera on model
-        if (!allBounds.isEmpty()) {
-          const center = allBounds.getCenter(new THREE.Vector3());
-          const size = allBounds.getSize(new THREE.Vector3());
-          const maxDim = Math.max(size.x, size.y, size.z);
-
-          controls.target.copy(center);
-          camera.position.set(
-            center.x + maxDim * 0.8,
-            center.y - maxDim * 0.8,
-            center.z + maxDim * 0.5
-          );
-          controls.update();
-
-          gridHelper.position.set(center.x, center.y, allBounds.min.z);
-
-          document.getElementById('stats').textContent =
-            `${loaded} tiles loaded | Center: (${center.x.toFixed(0)}, ${center.y.toFixed(0)}, ${center.z.toFixed(0)})`;
-        }
-
-      } catch (err) {
-        errorDiv.textContent = `Error: ${err.message}`;
-        zoneTree.textContent = '';
-        console.error(err);
+    function rebuildList(id, dataMap, hiddenSet, onToggle, sortByCount = false) {
+      const container = document.getElementById(id);
+      if (!container || dataMap.size === 0) return;
+      container.innerHTML = '';
+      let entries = [...dataMap];
+      entries.sort(sortByCount
+        ? (a, b) => b[1] - a[1]
+        : (a, b) => a[0].localeCompare(b[0]));
+      for (const [key, count] of entries) {
+        const row = document.createElement('label');
+        row.className = 'fi';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !hiddenSet.has(key);
+        cb.addEventListener('change', () => { onToggle(key, cb.checked); });
+        const lbl = document.createElement('span');
+        lbl.className = 'fi-lbl';
+        lbl.textContent = key;
+        lbl.title = key;
+        const cnt = document.createElement('span');
+        cnt.className = 'fi-cnt';
+        cnt.textContent = count.toLocaleString();
+        row.append(cb, lbl, cnt);
+        container.appendChild(row);
       }
     }
 
-    function collectTiles(node, tiles) {
-      if (node.content && node.content.uri && node.content.uri.endsWith('.glb')) {
-        if (matchesFilter(node)) {
-          tiles.push({
-            uri: node.content.uri,
-            metadata: node.metadata,
-          });
-        }
-      }
-      if (node.children) {
-        for (const child of node.children) {
-          collectTiles(child, tiles);
-        }
-      }
+    function rebuildZoneTree() {
+      const container = document.getElementById('fl-zones');
+      if (!container || zoneNodes.size === 0) return;
+      container.innerHTML = '';
+      const roots = [...zoneNodes.keys()].filter(p => !zoneNodes.get(p).parent).sort();
+      for (const root of roots) container.appendChild(buildZoneEl(root));
     }
 
-    function buildZoneUI(node, container) {
-      if (!node.children) return;
-      for (const child of node.children) {
-        const meta = child.metadata;
-        if (!meta) continue;
-
-        if (meta.class === 'Zone') {
-          const details = document.createElement('details');
-          details.open = true;
-          const summary = document.createElement('summary');
-          summary.textContent = meta.properties?.name || 'Zone';
-          details.appendChild(summary);
-
-          const inner = document.createElement('div');
-          inner.className = 'indent';
-          if (child.children) {
-            buildZoneUI(child, inner);
-          }
-          details.appendChild(inner);
-          container.appendChild(details);
-
-        } else if (meta.class === 'IfcClassGroup') {
-          const cls = meta.properties?.ifcClass || '?';
-          const count = meta.properties?.elementCount || 0;
-          const active = matchesFilter(child);
-
-          const span = document.createElement('span');
-          span.className = 'class-item';
-          span.textContent = `${cls} (${count})`;
-          if (!active) span.style.cssText = 'text-decoration:line-through;opacity:0.4';
-          container.appendChild(span);
-        }
+    function buildZoneEl(path) {
+      const node = zoneNodes.get(path);
+      const wrap = document.createElement('div');
+      const row = document.createElement('label');
+      row.className = 'fi';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !hiddenZones.has(path);
+      cb.addEventListener('change', () => {
+        setZoneVisible(path, cb.checked);
+        reapplyAllFilters();
+        rebuildZoneTree();
+      });
+      const lbl = document.createElement('span');
+      lbl.className = 'fi-lbl';
+      lbl.textContent = node.name;
+      row.append(cb, lbl);
+      wrap.appendChild(row);
+      if (node.childPaths.length > 0) {
+        const children = document.createElement('div');
+        children.className = 'zt-children';
+        for (const child of [...node.childPaths].sort()) children.appendChild(buildZoneEl(child));
+        wrap.appendChild(children);
       }
+      return wrap;
     }
 
-    // Animation loop
+    // --- 3D Tiles Renderer ---
+    let tilesRenderer = null;
+    let hasAutoZoomed = false;
+
+    function initTilesRenderer(url) {
+      if (tilesRenderer) {
+        scene.remove(tilesRenderer.group);
+        tilesRenderer.dispose();
+      }
+      hasAutoZoomed = false;
+      knownModels.clear(); knownClasses.clear(); zoneNodes.clear();
+      hiddenModels.clear(); hiddenZones.clear(); hiddenClasses.clear();
+
+      tilesRenderer = new TilesRenderer(url);
+      tilesRenderer.registerPlugin(new UnloadTilesPlugin({ bytesTarget: 600 * 1024 * 1024, delay: 2000 }));
+      tilesRenderer.registerPlugin(new UpdateOnChangePlugin());
+      tilesRenderer.setCamera(camera);
+      tilesRenderer.setResolutionFromRenderer(camera, renderer);
+      tilesRenderer.errorTarget = 8;
+      scene.add(tilesRenderer.group);
+
+      tilesRenderer.addEventListener('load-model', (e) => {
+        const meta = e.tile?.metadata;
+        const group = e.scene;
+        if (meta?.class === 'IfcClassGroup' && meta?.properties && group) {
+          group.userData.tileMeta = meta.properties;
+          registerTileMeta(meta.properties);
+          applyFilter(group);
+          scheduleRebuild();
+        }
+        updateStats();
+        if (!hasAutoZoomed) {
+          hasAutoZoomed = true;
+          setTimeout(() => V.zoomToFit(), 800);
+        }
+      });
+
+      tilesRenderer.addEventListener('dispose-model', updateStats);
+      tilesRenderer.addEventListener('load-tile-set', updateStats);
+
+      return tilesRenderer;
+    }
+
+    initTilesRenderer(`${tilesetRoot}/tileset.json`);
+
+    function updateStats() {
+      if (!tilesRenderer) return;
+      const s = tilesRenderer.stats;
+      document.getElementById('stats').innerHTML =
+        `Tiles: ${s.visible} vis / ${s.active} act<br>` +
+        `Loading: ${s.downloading} | SSE: ${tilesRenderer.errorTarget}px`;
+    }
+    setInterval(updateStats, 1000);
+
+    // --- Animate ---
     function animate() {
       requestAnimationFrame(animate);
       controls.update();
+      if (tilesRenderer) {
+        tilesRenderer.setCamera(camera);
+        tilesRenderer.setResolutionFromRenderer(camera, renderer);
+        tilesRenderer.update();
+      }
       renderer.render(scene, camera);
     }
     animate();
 
-    loadTileset();
-
     // --- Global Viewer API (window.V) ---
-    // Usable from browser console or automation tools.
-    // All methods return JSON-serializable results.
     const V = {};
-
-    // Scene references (populated after load)
     V._scene = scene;
     V._camera = camera;
     V._controls = controls;
     V._renderer = renderer;
+    V._tiles = () => tilesRenderer;
 
-    // List all mesh node names in the scene
+    V.errorTarget = (val) => {
+      if (val !== undefined && tilesRenderer) tilesRenderer.errorTarget = val;
+      updateStats();
+      return { errorTarget: tilesRenderer?.errorTarget };
+    };
+
+    V.quality = (preset) => {
+      const presets = { high: 2, medium: 8, low: 20 };
+      const val = presets[preset];
+      if (val === undefined) return { error: `Use: ${Object.keys(presets).join(', ')}` };
+      if (tilesRenderer) tilesRenderer.errorTarget = val;
+      updateStats();
+      return { preset, errorTarget: val };
+    };
+
+    V.tileStats = () => ({ ...tilesRenderer?.stats });
+
     V.nodes = () => {
       const names = [];
-      scene.traverse(obj => {
-        if (obj.isMesh) names.push(obj.name || `(unnamed:${obj.id})`);
-      });
+      scene.traverse(o => { if (o.isMesh) names.push(o.name || `(id:${o.id})`); });
       return names;
     };
 
-    // Search nodes by substring (case-insensitive)
-    V.find = (query) => {
-      const q = query.toLowerCase();
-      const results = [];
-      scene.traverse(obj => {
-        if (obj.isMesh && obj.name && obj.name.toLowerCase().includes(q)) {
-          results.push(obj.name);
-        }
-      });
+    V.find = (q) => {
+      const ql = q.toLowerCase(), results = [];
+      scene.traverse(o => { if (o.isMesh && o.name?.toLowerCase().includes(ql)) results.push(o.name); });
       return results;
     };
 
-    // Get scene stats
     V.stats = () => {
       let meshes = 0, tris = 0, verts = 0;
-      scene.traverse(obj => {
-        if (obj.isMesh) {
-          meshes++;
-          const geo = obj.geometry;
-          if (geo.index) tris += geo.index.count / 3;
-          else if (geo.attributes.position) tris += geo.attributes.position.count / 3;
-          if (geo.attributes.position) verts += geo.attributes.position.count;
-        }
+      scene.traverse(o => {
+        if (!o.isMesh) return;
+        meshes++;
+        const g = o.geometry;
+        tris += g.index ? g.index.count / 3 : (g.attributes.position?.count / 3 || 0);
+        verts += g.attributes.position?.count || 0;
       });
       return { meshes, triangles: Math.round(tris), vertices: verts };
     };
 
-    // Zoom to fit everything (or a filtered set)
-    V.zoomToFit = (nameFilter) => {
+    V.zoomToFit = (filter) => {
       const box = new THREE.Box3();
       let count = 0;
-      scene.traverse(obj => {
-        if (!obj.isMesh) return;
-        if (nameFilter && !(obj.name || '').toLowerCase().includes(nameFilter.toLowerCase())) return;
-        box.expandByObject(obj);
-        count++;
+      scene.traverse(o => {
+        if (!o.isMesh || !o.visible) return;
+        if (filter && !(o.name || '').toLowerCase().includes(filter.toLowerCase())) return;
+        box.expandByObject(o); count++;
       });
-      if (box.isEmpty()) return { error: 'No matching meshes', filter: nameFilter };
+      if (box.isEmpty()) return { error: 'No visible meshes', filter };
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
       controls.target.copy(center);
       camera.position.set(center.x + maxDim * 0.8, center.y - maxDim * 0.8, center.z + maxDim * 0.5);
       controls.update();
-      return { matched: count, center: [+center.x.toFixed(2), +center.y.toFixed(2), +center.z.toFixed(2)], size: [+size.x.toFixed(2), +size.y.toFixed(2), +size.z.toFixed(2)] };
+      return { matched: count, center: center.toArray().map(v => +v.toFixed(2)) };
     };
 
-    // Show only meshes matching filter, hide the rest
-    V.isolate = (nameFilter) => {
-      const q = nameFilter.toLowerCase();
+    V.isolate = (filter) => {
+      const q = filter.toLowerCase();
       let shown = 0, hidden = 0;
-      scene.traverse(obj => {
-        if (!obj.isMesh) return;
-        const match = (obj.name || '').toLowerCase().includes(q);
-        obj.visible = match;
-        if (match) shown++; else hidden++;
+      scene.traverse(o => {
+        if (!o.isMesh) return;
+        const match = (o.name || '').toLowerCase().includes(q);
+        o.visible = match;
+        match ? shown++ : hidden++;
       });
       return { shown, hidden };
     };
 
-    // Show all meshes
     V.showAll = () => {
       let count = 0;
-      scene.traverse(obj => { if (obj.isMesh) { obj.visible = true; count++; } });
+      scene.traverse(o => { if (o.isMesh) { o.visible = true; count++; } });
       return { shown: count };
     };
 
-    // Hide meshes matching filter
-    V.hide = (nameFilter) => {
-      const q = nameFilter.toLowerCase();
+    V.hide = (filter) => {
+      const q = filter.toLowerCase();
       let hidden = 0;
-      scene.traverse(obj => {
-        if (obj.isMesh && (obj.name || '').toLowerCase().includes(q)) {
-          obj.visible = false;
-          hidden++;
-        }
+      scene.traverse(o => {
+        if (o.isMesh && (o.name || '').toLowerCase().includes(q)) { o.visible = false; hidden++; }
       });
       return { hidden };
     };
 
-    // Get bounding box of a specific node (by exact name or substring)
-    V.bounds = (nameFilter) => {
-      const q = nameFilter.toLowerCase();
+    V.bounds = (filter) => {
       const box = new THREE.Box3();
       let count = 0;
-      scene.traverse(obj => {
-        if (obj.isMesh && (obj.name || '').toLowerCase().includes(q)) {
-          box.expandByObject(obj);
-          count++;
+      scene.traverse(o => {
+        if (o.isMesh && (o.name || '').toLowerCase().includes(filter.toLowerCase())) {
+          box.expandByObject(o); count++;
         }
       });
-      if (box.isEmpty()) return { error: 'Not found', filter: nameFilter };
-      const min = box.min, max = box.max;
-      return {
-        matched: count,
-        min: [+min.x.toFixed(3), +min.y.toFixed(3), +min.z.toFixed(3)],
-        max: [+max.x.toFixed(3), +max.y.toFixed(3), +max.z.toFixed(3)],
-      };
+      if (box.isEmpty()) return { error: 'Not found' };
+      return { matched: count, min: box.min.toArray().map(v => +v.toFixed(3)), max: box.max.toArray().map(v => +v.toFixed(3)) };
     };
 
-    // Set camera position and target directly
     V.setCamera = (pos, target) => {
-      if (pos) camera.position.set(pos[0], pos[1], pos[2]);
-      if (target) controls.target.set(target[0], target[1], target[2]);
+      if (pos) camera.position.set(...pos);
+      if (target) controls.target.set(...target);
       controls.update();
       return { position: camera.position.toArray().map(v => +v.toFixed(2)), target: controls.target.toArray().map(v => +v.toFixed(2)) };
     };
 
-    // Get current camera state
     V.getCamera = () => ({
       position: camera.position.toArray().map(v => +v.toFixed(2)),
       target: controls.target.toArray().map(v => +v.toFixed(2)),
     });
 
-    // Highlight a node by coloring it (keeps original color to restore later)
-    V.highlight = (nameFilter, color = 0xff0000) => {
-      const q = nameFilter.toLowerCase();
+    V.highlight = (filter, color = 0xff0000) => {
+      const q = filter.toLowerCase();
       let count = 0;
-      scene.traverse(obj => {
-        if (!obj.isMesh) return;
-        if (!(obj.name || '').toLowerCase().includes(q)) return;
-        if (!obj.userData._origMaterial) obj.userData._origMaterial = obj.material;
-        obj.material = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
+      scene.traverse(o => {
+        if (!o.isMesh || !(o.name || '').toLowerCase().includes(q)) return;
+        if (!o.userData._origMat) o.userData._origMat = o.material;
+        o.material = new THREE.MeshStandardMaterial({ color, side: THREE.DoubleSide });
         count++;
       });
       return { highlighted: count };
     };
 
-    // Restore original materials
-    V.unhighlight = (nameFilter) => {
-      const q = nameFilter ? nameFilter.toLowerCase() : null;
+    V.unhighlight = (filter) => {
+      const q = filter ? filter.toLowerCase() : null;
       let count = 0;
-      scene.traverse(obj => {
-        if (!obj.isMesh || !obj.userData._origMaterial) return;
-        if (q && !(obj.name || '').toLowerCase().includes(q)) return;
-        obj.material = obj.userData._origMaterial;
-        delete obj.userData._origMaterial;
+      scene.traverse(o => {
+        if (!o.isMesh || !o.userData._origMat) return;
+        if (q && !(o.name || '').toLowerCase().includes(q)) return;
+        o.material = o.userData._origMat;
+        delete o.userData._origMat;
         count++;
       });
       return { restored: count };
     };
 
-    // Set wireframe mode
-    V.wireframe = (on = true, nameFilter) => {
+    V.wireframe = (on = true, filter) => {
       let count = 0;
-      scene.traverse(obj => {
-        if (!obj.isMesh) return;
-        if (nameFilter && !(obj.name || '').toLowerCase().includes(nameFilter.toLowerCase())) return;
-        obj.material.wireframe = on;
-        count++;
+      scene.traverse(o => {
+        if (!o.isMesh) return;
+        if (filter && !(o.name || '').toLowerCase().includes(filter.toLowerCase())) return;
+        o.material.wireframe = on; count++;
       });
       return { affected: count, wireframe: on };
     };
 
-    // X-ray mode (make everything semi-transparent except matching)
-    V.xray = (nameFilter, opacity = 0.1) => {
-      const q = nameFilter.toLowerCase();
+    V.xray = (filter, opacity = 0.1) => {
+      const q = filter.toLowerCase();
       let solid = 0, faded = 0;
-      scene.traverse(obj => {
-        if (!obj.isMesh) return;
-        const match = (obj.name || '').toLowerCase().includes(q);
-        if (!obj.userData._origMaterial) obj.userData._origMaterial = obj.material;
-        if (match) {
-          obj.material = obj.userData._origMaterial;
-          solid++;
-        } else {
-          obj.material = new THREE.MeshStandardMaterial({
-            color: 0x888888, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false,
-          });
+      scene.traverse(o => {
+        if (!o.isMesh) return;
+        const match = (o.name || '').toLowerCase().includes(q);
+        if (!o.userData._origMat) o.userData._origMat = o.material;
+        if (match) { o.material = o.userData._origMat; solid++; }
+        else {
+          o.material = new THREE.MeshStandardMaterial({ color: 0x888888, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false });
           faded++;
         }
       });
       return { solid, faded };
     };
 
-    // Isolate + zoom facing the object's front face.
-    // Samples mesh face normals to find dominant face direction, then
-    // positions camera opposite that normal for a head-on close-up view.
-    V.focusOn = (nameFilter) => {
-      V.isolate(nameFilter);
+    V.focusOn = (filter) => {
+      V.isolate(filter);
       const box = new THREE.Box3();
-      // Bucket face normals by direction — front/back cancel if summed,
-      // so track positive and negative contributions per axis separately.
-      const buckets = new Float64Array(6); // +x,-x,+y,-y,+z,-z area
-      scene.traverse(obj => {
-        if (!obj.isMesh || !obj.visible) return;
-        box.expandByObject(obj);
-        const geo = obj.geometry;
-        const pos = geo.attributes.position;
-        const idx = geo.index;
-        const cnt = idx ? idx.count : pos.count;
-        const wm = new THREE.Matrix3().getNormalMatrix(obj.matrixWorld);
-        const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-        const fn = new THREE.Vector3();
-        for (let i = 0; i < cnt; i += 3) {
-          const i0 = idx ? idx.getX(i) : i, i1 = idx ? idx.getX(i+1) : i+1, i2 = idx ? idx.getX(i+2) : i+2;
-          a.fromBufferAttribute(pos, i0); b.fromBufferAttribute(pos, i1); c.fromBufferAttribute(pos, i2);
-          fn.crossVectors(b.clone().sub(a), c.clone().sub(a)).applyMatrix3(wm);
-          const area = fn.length();
-          if (area < 1e-8) continue;
-          fn.normalize();
-          // Accumulate into the dominant axis bucket
-          const ax = Math.abs(fn.x), ay = Math.abs(fn.y), az = Math.abs(fn.z);
-          if (ax >= ay && ax >= az) buckets[fn.x > 0 ? 0 : 1] += area;
-          else if (ay >= az) buckets[fn.y > 0 ? 2 : 3] += area;
-          else buckets[fn.z > 0 ? 4 : 5] += area;
-        }
-      });
+      scene.traverse(o => { if (o.isMesh && o.visible) box.expandByObject(o); });
       if (box.isEmpty()) return { error: 'No matching meshes' };
       const center = box.getCenter(new THREE.Vector3());
       const size = box.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
-      // Pick the bucket with most area — that's the dominant face direction
-      let best = 0;
-      for (let i = 1; i < 6; i++) if (buckets[i] > buckets[best]) best = i;
-      const dirs = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
-      const d = dirs[best];
-      const faceDir = new THREE.Vector3(d[0], d[1], d[2]);
-      const dist = maxDim * 1.0;
       controls.target.copy(center);
-      camera.position.copy(center).addScaledVector(faceDir, dist);
+      camera.position.copy(center).addScaledVector(new THREE.Vector3(0, -1, 0.5).normalize(), maxDim * 1.5);
       camera.up.set(0, 0, 1);
       controls.update();
-      return { center: [+center.x.toFixed(2), +center.y.toFixed(2), +center.z.toFixed(2)], size: [+size.x.toFixed(2), +size.y.toFixed(2), +size.z.toFixed(2)], faceDir: [d[0], d[1], d[2]] };
+      return { center: center.toArray().map(v => +v.toFixed(2)) };
     };
 
-    // Zoom to a specific node and isolate + xray it
-    V.inspect = (nameFilter) => {
-      V.showAll();
-      V.unhighlight();
-      const xr = V.xray(nameFilter, 0.05);
-      const zoom = V.zoomToFit(nameFilter);
-      return { ...xr, ...zoom };
+    V.inspect = (filter) => { V.showAll(); V.unhighlight(); return { ...V.xray(filter, 0.05), ...V.zoomToFit(filter) }; };
+
+    // Programmatic filter API
+    V.filter = {
+      hideModel:  (m) => { hiddenModels.add(m);      reapplyAllFilters(); scheduleRebuild(); },
+      showModel:  (m) => { hiddenModels.delete(m);   reapplyAllFilters(); scheduleRebuild(); },
+      hideClass:  (c) => { hiddenClasses.add(c);     reapplyAllFilters(); scheduleRebuild(); },
+      showClass:  (c) => { hiddenClasses.delete(c);  reapplyAllFilters(); scheduleRebuild(); },
+      hideZone:   (z) => { setZoneVisible(z, false); reapplyAllFilters(); scheduleRebuild(); },
+      showZone:   (z) => { setZoneVisible(z, true);  reapplyAllFilters(); scheduleRebuild(); },
+      reset:      ()  => { hiddenModels.clear(); hiddenZones.clear(); hiddenClasses.clear(); reapplyAllFilters(); scheduleRebuild(); },
+      state:      ()  => ({ models: [...hiddenModels], zones: [...hiddenZones], classes: [...hiddenClasses] }),
     };
 
-    // Help - list all commands
     V.help = () => ({
-      'V.nodes()': 'List all mesh node names',
-      'V.find(query)': 'Search nodes by name substring',
-      'V.stats()': 'Scene stats (meshes, triangles, vertices)',
-      'V.zoomToFit(filter?)': 'Zoom camera to fit all or filtered meshes',
-      'V.focusOn(filter)': 'Isolate + zoom facing largest face (for close inspection)',
+      'V.errorTarget(n)': 'Set SSE pixel threshold (lower=more detail). Default 8.',
+      'V.quality("high"|"medium"|"low")': 'Preset: high=2px, medium=8px, low=20px',
+      'V.tileStats()': '3d-tiles-renderer stats',
+      'V.filter.hideClass("IfcWall")': 'Hide all tiles of a class',
+      'V.filter.showZone("D0/HAV0")': 'Show a zone (prefix propagates to children)',
+      'V.filter.hideModel("B-290")': 'Hide a model',
+      'V.filter.reset()': 'Clear all filters',
+      'V.filter.state()': 'Show current filter state',
+      'V.nodes()': 'List all mesh names',
+      'V.find(q)': 'Search mesh names by substring',
+      'V.stats()': 'Scene mesh/tri/vert counts',
+      'V.zoomToFit(filter?)': 'Zoom to visible (or filtered) meshes',
+      'V.focusOn(filter)': 'Isolate + zoom',
       'V.isolate(filter)': 'Show only matching meshes',
       'V.showAll()': 'Show all meshes',
       'V.hide(filter)': 'Hide matching meshes',
-      'V.bounds(filter)': 'Get bounding box of matching meshes',
-      'V.setCamera([x,y,z], [tx,ty,tz])': 'Set camera position and target',
+      'V.setCamera([x,y,z],[tx,ty,tz])': 'Set camera position and target',
       'V.getCamera()': 'Get current camera state',
       'V.highlight(filter, color?)': 'Color matching meshes (default red)',
       'V.unhighlight(filter?)': 'Restore original materials',
-      'V.wireframe(on?, filter?)': 'Toggle wireframe mode',
+      'V.wireframe(on?, filter?)': 'Toggle wireframe',
       'V.xray(filter, opacity?)': 'X-ray: fade everything except match',
-      'V.inspect(filter)': 'X-ray + zoom to fit a specific node',
+      'V.inspect(filter)': 'X-ray + zoom to fit',
     });
 
     window.V = V;
-    console.log('[Viewer API] window.V ready. Type V.help() for commands.');
+    console.log('[Viewer] ready. V.help() for commands. V.filter for filtering.');
+    console.log(`[Viewer] Loading: ${tilesetRoot}/tileset.json`);
+    console.log('[Viewer] Orbit pivot: left-click to set pivot at mouse hit point');
   </script>
 </body>
 </html>
